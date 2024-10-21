@@ -1,0 +1,4 @@
+[package]
+name = "rule-30-solver-miner"
+version = "0.1.0"
+edition = "2021"
