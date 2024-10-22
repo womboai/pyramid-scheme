@@ -1,54 +1,89 @@
 #![feature(portable_simd)]
 
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::simd::{ToBytes, u64x4, u8x32};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use log::{error, info};
+use threadpool::ThreadPool;
 
-fn solve(data: &mut [u8]) {
-    let step = size_of::<u64x4>();
+#[derive(Default)]
+struct Solver {
+    last: u64,
+}
 
-    let mut last = 0u64;
+impl Solver {
+    fn new() -> Self {
+        Solver::default()
+    }
 
-    for i in (0..data.len()).step_by(step) {
-        let chunk = u64x4::from_le_bytes(u8x32::from_slice(&data[i..i + step]));
-        let mut modified_chunk = u64x4::from([0u64; 4]);
+    fn solve(&mut self, data: &mut [u8]) {
+        let step = size_of::<u64x4>();
 
-        for j in 0..4 {
-            let x = chunk[j];
+        for i in (0..data.len()).step_by(step) {
+            let chunk = u64x4::from_le_bytes(u8x32::from_slice(&data[i..i + step]));
+            let mut modified_chunk = u64x4::from([0u64; 4]);
 
-            modified_chunk[j] = x << 1 | x << 2 | last >> 63 | last >> 62;
+            for j in 0..4 {
+                let x = chunk[j];
 
-            last = x;
+                modified_chunk[j] = x << 1 | x << 2 | self.last >> 63 | self.last >> 62;
+
+                self.last = x;
+            }
+
+            data[i..i + step].copy_from_slice((chunk ^ modified_chunk).to_le_bytes().as_array());
+        }
+    }
+}
+
+fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
+    info!("Validator {address} has connected");
+
+    let mut buffer = Vec::with_capacity(16384);
+    let mut solver = Solver::new();
+
+    unsafe {
+        buffer.set_len(buffer.capacity());
+    }
+
+    loop {
+        let len = match stream.read(&mut buffer) {
+            Ok(len) => len,
+            Err(error) => {
+                error!("Failed to read from validator {address}, {error}");
+                return;
+            }
+        };
+
+        if len == 0 {
+            break;
         }
 
-        data[i..i + step].copy_from_slice((chunk ^ modified_chunk).to_le_bytes().as_array());
+        solver.solve(&mut buffer);
+        match stream.write(&buffer) {
+            Ok(len) => {
+                if len == 0 {
+                    error!("Validator {address}'s connection does not appear to be writable");
+                }
+            }
+            Err(error) => {
+                error!("Failed to write to validator {address}, {error}");
+                return;
+            }
+        }
     }
 }
 
 fn main() {
-    let mut data = Vec::with_capacity(262144);
+    let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
+    let listener = TcpListener::bind((ip, 8129u16)).unwrap();
+    let pool = ThreadPool::new(32);
 
-    data.push(1u8);
+    listener.set_nonblocking(true).unwrap();
 
-    for _ in 0..31 {
-        data.push(0u8)
-    }
-
-    let now = Instant::now();
-
-    for i in 1..1_000_000 {
-        if i % 128 == 0 {
-            for _ in 0..32 {
-                data.push(0);
-            }
+    loop {
+        if let Ok((stream, address)) = listener.accept() {
+            pool.execute(move || handle_connection(stream, address));
         }
-
-        solve(&mut data);
-        println!("{data:?}");
-        sleep(Duration::from_millis(500));
     }
-
-    let elapsed = now.elapsed();
-
-    println!("Elapsed: {elapsed:.2?}");
 }
