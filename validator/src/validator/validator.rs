@@ -50,70 +50,60 @@ impl Validator {
         unimplemented!()
     }
 
-    fn normalize_response_data<'a, I>(&self, responses: I, dest: &mut [u8])
-    where
-        I: Iterator<Item = &'a [u8]>,
-    {
-        fn rule_30_simd<const N: usize>(a: Simd<u64, N>) -> Simd<u64, N>
-        where
-            Simd<u64, N>: SimdUint,
-        {
-            a ^ ((a << Simd::splat(1)) | (a << Simd::splat(2)))
+    fn normalize_response_data(lists: &mut [Simd<u8, 32>]) -> Vec<u8> {
+        fn rule_30(a: u64) -> u64 {
+            a ^ ((a << 1) | (a << 2))
         }
-
-        fn normalize_pair_simd<const N: usize>(a: Simd<u64, N>, b: Simd<u64, N>) -> (Simd<u64, N>, Simd<u64, N>)
-        where
-            Simd<u64, N>: SimdUint,
-        {
-            let carry = a & Simd::splat(1);
-            let mut a = a >> Simd::splat(1);
-            let mut b = (carry << Simd::splat(63)) | b;
-            a = rule_30_simd(a);
-            b = rule_30_simd(b);
-            let msb = b >> Simd::splat(63);
-            b &= Simd::splat((1 << 63) - 1);
-            a = (a << Simd::splat(1)) | msb;
-            (a, b)
+    
+        fn normalize_pair(a: u8, b: u8) -> (u8, u8) {
+            // Convert u8 to u64 for processing
+            let (new_a, new_b) = {
+                let a = a as u64;
+                let b = b as u64;
+                let carry = a & 1;
+                let mut a = a >> 1;
+                let mut b = (carry << 63) | b;
+                a = rule_30(a);
+                b = rule_30(b);
+                let msb = b >> 63;
+                b &= (1 << 63) - 1;
+                a = (a << 1) | msb;
+                (a as u8, b as u8)  // Convert back to u8
+            };
+            (new_a, new_b)
         }
-
-        let mut dest_index = 0;
-        let mut last_byte = 0u8;
-        let mut is_first = true;
-
-        for response in responses {
-            if response.is_empty() {
-                continue;
-            }
-
-            if is_first {
-                // Copy the first byte of the first response as-is
-                dest[dest_index] = response[0];
-                dest_index += 1;
-                is_first = false;
-            } else {
-                // Normalize the first byte with the last byte of the previous response
-                let (_, new_first) = normalize_pair_simd(
-                    Simd::from_array([last_byte as u64]),
-                    Simd::from_array([response[0] as u64])
-                );
-                dest[dest_index] = new_first.to_array()[0] as u8;
-                dest_index += 1;
-            }
-
-            // Copy the middle bytes
-            let middle_len = response.len() - 2;
-            dest[dest_index..dest_index + middle_len].copy_from_slice(&response[1..response.len() - 1]);
-            dest_index += middle_len;
-
-            // Store the last byte for the next iteration
-            last_byte = response[response.len() - 1];
+    
+        let mut normalized_outputs = Vec::new();
+        
+        // Process lists
+        for i in 0..lists.len()-1 {
+            let mut current_list = lists[i].to_array();
+            let mut next_list = lists[i+1].to_array();
+            
+            let (new_last, new_first) = normalize_pair(
+                current_list[31],  // last element of current list
+                next_list[0]       // first element of next list
+            );
+            
+            current_list[31] = new_last;
+            next_list[0] = new_first;
+            
+            // Update the lists with normalized values
+            lists[i] = Simd::from_array(current_list);
+            lists[i+1] = Simd::from_array(next_list);
+            
+            // Extend normalized_outputs with current list
+            normalized_outputs.extend_from_slice(&current_list);
         }
-
-        // Write the final byte
-        if dest_index < dest.len() {
-            dest[dest_index] = last_byte;
+        
+        // Add the last list if there was more than one list
+        if lists.len() > 1 {
+            normalized_outputs.extend_from_slice(&lists[lists.len()-1].to_array());
         }
+        
+        normalized_outputs
     }
+    
 }
 
 // Implement error handling
