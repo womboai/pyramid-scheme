@@ -34,6 +34,8 @@ impl Solver {
         Solver::default()
     }
 
+    /// Solve a chunk of memory aligned to `Simd<u64, N>` in `size_of::<Simd<u64, N>>` chunks
+    /// SAFETY: Safe if `data` is aligned, otherwise the behavior is undefined
     unsafe fn solve_chunked<const N: usize>(&mut self, data: &mut [u8])
     where
         LaneCount<N>: SupportedLaneCount,
