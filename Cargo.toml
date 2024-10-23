@@ -1,6 +1,11 @@
 [workspace]
 
+resolver = "2"
+
 members = [
     "miner",
     "validator",
 ]
+
+[workspace.dependencies]
+log = "0.4.22"

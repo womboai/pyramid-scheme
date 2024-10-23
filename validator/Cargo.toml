@@ -2,8 +2,6 @@
 name = "validator"
 version = "0.1.0"
 edition = "2021"
-
-[dependencies]
 tokio = { version = "1.28", features = ["full"] }
 async-trait = "0.1.68"
 substrate-interface = "0.14.0"
@@ -15,3 +13,4 @@ env_logger = "0.10"
 ndarray = "0.15"
 rand = "0.8"
 parity-scale-codec = "3.2"
+log = { workspace = true }
