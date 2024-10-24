@@ -6,7 +6,7 @@ use anyhow::Result;
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
 type SubtensorConfig = SubstrateConfig;
-type AccountId = <SubtensorConfig as Config>::AccountId;
+pub type AccountId = <SubtensorConfig as Config>::AccountId;
 
 #[derive(Decode, Default, Clone, Debug)]
 pub struct AxonInfo {

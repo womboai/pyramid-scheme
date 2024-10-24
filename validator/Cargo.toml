@@ -9,15 +9,12 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { workspace = true }
-async-trait = "0.1.68"
-substrate-interface = "0.14.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
-log = { workspace = true }
-env_logger = "0.10"
-ndarray = "0.15"
-rand = "0.8"
+reqwest = { version = "0.12.8", features = ["json"] }
+tracing-subscriber = "0.3.18"
 parity-scale-codec = "3.2"
+tracing = "0.1.40"
+anyhow = { workspace = true }
 
 subtensor-chain = { path = "../base" }
