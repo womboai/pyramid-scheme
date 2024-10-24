@@ -1,3 +1,4 @@
+[package]
 name = "rule-30-solver-validator"
 version = "0.1.0"
 edition = "2021"
