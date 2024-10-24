@@ -1,18 +1,92 @@
+use std::fs::File;
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::simd::Simd;
-use std::time::Instant;
 
 use anyhow::Result;
-use ndarray::Array1;
+use memmap2::{MmapMut, MmapOptions};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use substrate_interface::Keypair;
 use subtensor_chain::{AccountId, NeuronInfoLite, Subtensor};
+use tempfile::{tempfile, NamedTempFile};
 use tokio::time::{Duration, sleep};
 use tracing::error;
 use crate::config::{self, EPOCH_LENGTH, WANDB_REFRESH_INTERVAL};
 use crate::models::ComputationData;
+
+struct MemoryMappedFile {
+    mmap: MmapMut,
+    file: File,
+    path: PathBuf,
+}
+
+impl MemoryMappedFile {
+    fn new(file: File, path: impl AsRef<Path>) -> Self {
+        // SAFETY: This would typically not be safe as this is technically a self-referential
+        //  struct. Mmap is using a reference of `&file` without a lifetime. However this works as
+        //  mmap uses the file descriptor internally, so even if {File} is moved, the descriptor
+        //  remains the same, and the file descriptor is closed at the same time the mmap is closed.
+        let mmap = unsafe { MmapOptions::new().map_mut(&file) }.unwrap();
+
+        Self {
+            mmap,
+            file,
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+}
+
+struct MemoryMappedStorage {
+    temporary_file: MemoryMappedFile,
+    storage_path: PathBuf,
+}
+
+impl MemoryMappedStorage {
+    fn new(storage_path: impl AsRef<Path>) -> Self {
+        let temporary_file_path = NamedTempFile::new().unwrap();
+
+        fs::rename(&storage_path, &temporary_file_path);
+
+        let memored_mapped_temporary_file = MemoryMappedFile::new(temporary_file_path.reopen().unwrap(), temporary_file_path.path().to_owned());
+
+        Self {
+            temporary_file: memored_mapped_temporary_file,
+            storage_path: storage_path.as_ref().to_path_buf(),
+
+        }
+    }
+
+    fn flush(&self) -> Result<()> {
+        self.temporary_file.mmap.flush()?;
+        fs::rename(&self.temporary_file.path, &self.storage_path)?;
+
+        Ok(())
+    }
+}
+
+impl Deref for MemoryMappedStorage {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.temporary_file.mmap
+    }
+}
+
+impl DerefMut for MemoryMappedStorage {
+
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.temporary_file.mmap
+    }
+}
+
+impl Drop for MemoryMappedStorage {
+    fn drop(&mut self) {
+        // TODO Handle drop errors
+        self.flush().unwrap();
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct ValidatorState {
@@ -27,8 +101,8 @@ pub struct Validator {
     neurons: Vec<NeuronInfoLite>,
     client: Client,
 
-    current_row: Array1<u64>,
-    center_column: Array1<u64>,
+    current_row: MemoryMappedStorage,
+    center_column: MemoryMappedStorage,
     state: ValidatorState,
 
     last_metagraph_sync: u32,
@@ -54,19 +128,23 @@ impl Validator {
             hotkeys,
         };
 
+        let current_row = MemoryMappedStorage::new("current_row.bin");
+        let center_column = MemoryMappedStorage::new("center_column.bin");
+
         let mut validator = Self {
             keypair,
             subtensor,
             neurons,
             client: Client::new(),
-            current_row: Array1::from_vec(vec![1]),
-            center_column: Array1::from_vec(vec![1]),
+            current_row,
+            center_column,
             state,
             last_metagraph_sync: 0,
         };
 
-        validator.load_state()?;
-        Ok(validator)
+        validator.load_state().unwrap();
+
+        validator
     }
 
     fn state_path(&self) -> PathBuf {
@@ -219,7 +297,6 @@ impl Validator {
 
         self.step += 1;
         self.save_state()?;
-        self.check_wandb_run()?;
 
         Ok(())
     }
