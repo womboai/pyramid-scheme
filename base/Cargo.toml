@@ -1,0 +1,21 @@
+[package]
+name = "subtensor-chain"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+path = "src/lib.rs"
+
+[dependencies]
+log = { workspace = true }
+anyhow = { workspace = true }
+
+parity-scale-codec = "3.0.0"
+subxt = { version = "0.37.0", features = ["jsonrpsee"] }
+
+[build-dependencies]
+subxt-codegen = "0.37.0"
+subxt-metadata = "0.37.0"
+parity-scale-codec = "3.0.0"
+tokio = { workspace = true }
