@@ -1,7 +1,7 @@
-use parity_scale_codec::{Compact, Decode};
-use subxt::client::OnlineClient;
-use subxt::{Config, SubstrateConfig};
 use anyhow::Result;
+use parity_scale_codec::{Compact, Decode};
+use subxt::client::{OfflineClientT, OnlineClient, OnlineClientT};
+use subxt::{Config, SubstrateConfig};
 
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
@@ -58,7 +58,7 @@ pub struct Subtensor {
 impl Subtensor {
     pub async fn new(url: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            client: OnlineClient::from_url(url).await?
+            client: OnlineClient::from_url(url).await?,
         })
     }
 
@@ -67,7 +67,8 @@ impl Subtensor {
             .neuron_info_runtime_api()
             .get_neurons_lite(netuid);
 
-        let response = self.client
+        let response = self
+            .client
             .runtime_api()
             .at_latest()
             .await?
@@ -77,18 +78,25 @@ impl Subtensor {
         Ok(Vec::<NeuronInfoLite>::decode(&mut response.as_ref())?)
     }
 
-    pub fn set_weights(&self, netuid: u16, weights: Vec<(u16, u16)>, version_key: u64) -> Result<()> {
-        let set_weights_payload = api::tx()
-            .subtensor_module()
-            .set_weights(
-                netuid,
-                weights.iter().map(|(uid, _)| *uid).collect(),
-                weights.iter().map(|(_, weight)| *weight).collect(),
-                version_key,
-            );
+    pub fn set_weights(
+        &self,
+        netuid: u16,
+        weights: Vec<(u16, u16)>,
+        version_key: u64,
+    ) -> Result<()> {
+        let set_weights_payload = api::tx().subtensor_module().set_weights(
+            netuid,
+            weights.iter().map(|(uid, _)| *uid).collect(),
+            weights.iter().map(|(_, weight)| *weight).collect(),
+            version_key,
+        );
 
         let response = self.client.tx();
 
         Ok(())
+    }
+
+    pub fn get_block_number(&self) -> Result<u64> {
+        Ok(self.client.blocks().at_latest().await?.number().into())
     }
 }

@@ -2,22 +2,21 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::simd::{LaneCount, Simd, SupportedLaneCount, u64x4};
+use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
 use std::slice;
+use std::time::Instant;
 
 use log::{error, info};
+use subtensor_chain::Subtensor;
 use threadpool::ThreadPool;
+use tokio::time::Instant;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
-    unsafe {
-        slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>())
-    }
+    unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
 }
 
 fn as_u8_mut<T>(data: &mut [T]) -> &mut [u8] {
-    unsafe {
-        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * size_of::<T>())
-    }
+    unsafe { slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * size_of::<T>()) }
 }
 
 // Ensure that we're always aligned for SIMD access
@@ -40,7 +39,10 @@ impl Solver {
     where
         LaneCount<N>: SupportedLaneCount,
     {
-        let data = slice::from_raw_parts_mut(data.as_mut_ptr() as *mut Simd<u64, N>, data.len() / size_of::<Simd<u64, N>>());
+        let data = slice::from_raw_parts_mut(
+            data.as_mut_ptr() as *mut Simd<u64, N>,
+            data.len() / size_of::<Simd<u64, N>>(),
+        );
 
         for i in 0..data.len() {
             let mut modified_chunk = Simd::<u64, N>::splat(0);
@@ -68,7 +70,11 @@ impl Solver {
                 x |= (data_u8[i] as u64) << (8 * i)
             }
 
-            data_u8.copy_from_slice(&(x ^ (x << 1 | x << 2 | self.last >> 63 | self.last >> 62)).to_le_bytes().as_slice()[0..data_u8.len()]);
+            data_u8.copy_from_slice(
+                &(x ^ (x << 1 | x << 2 | self.last >> 63 | self.last >> 62))
+                    .to_le_bytes()
+                    .as_slice()[0..data_u8.len()],
+            );
 
             self.last = x;
         } else if data_u8.len() < 8 * 2 {
@@ -131,7 +137,16 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
     }
 }
 
-fn main() {
+async fn main() {
+    let subtensor = Subtensor::new(config::SUBTENSOR_URL).await.unwrap();
+
+    let mut current_block = subtensor.get_block_number().await.unwrap();
+    let mut last_block_fetch = Instant::now();
+
+    let mut metagraph_sync = current_block;
+
+    let mut neurons = subtensor.get_neurons().await.unwrap();
+
     let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
     let listener = TcpListener::bind((ip, 8091)).unwrap();
     let pool = ThreadPool::new(32);
@@ -139,6 +154,14 @@ fn main() {
     listener.set_nonblocking(true).unwrap();
 
     loop {
+        if Instant::now() - last_block_fetch >= 12 {
+            current_block = subtensor.get_block_number().await?;
+
+            if current_block - metagraph_sync >= config::EPOCH_LENGTH {
+                neurons = subtensor.get_neurons().await?;
+            }
+        }
+
         if let Ok((stream, address)) = listener.accept() {
             pool.execute(move || handle_connection(stream, address));
         }
