@@ -211,7 +211,7 @@ impl Validator {
         // Set weights if enough time has passed
         let node = &self.metagraph.nodes[&self.keypair.ss58_address()];
         if block - node.last_updated >= EPOCH_LENGTH {
-            self.set_weights()?;
+            self.subtensor.set_weights()?;
         }
 
         Ok(())
@@ -267,14 +267,14 @@ impl Validator {
             match result {
                 Ok((response, inference_time)) => {
                     if let Ok(data) = response.json::<ComputationData>().await {
-                        self.scores[uid as usize] = 1.0 / inference_time;
+                        self.state.scores[uid as usize] = 1.0 / inference_time;
                         responses.push(data.parts);
                     } else {
-                        self.scores[uid as usize] = 0.0;
+                        self.state.scores[uid as usize] = 0.0;
                     }
                 }
                 Err(_) => {
-                    self.scores[uid as usize] = 0.0;
+                    self.state.scores[uid as usize] = 0.0;
                 }
             }
         }
