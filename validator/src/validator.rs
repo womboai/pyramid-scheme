@@ -1,5 +1,5 @@
-use std::fs::File;
 use std::fs;
+use std::fs::File;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::simd::Simd;
@@ -8,11 +8,13 @@ use anyhow::Result;
 use memmap2::{MmapMut, MmapOptions};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use substrate_interface::Keypair;
-use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
-use tempfile::{tempfile, NamedTempFile};
+use tempfile::NamedTempFile;
 use tokio::time::{Duration, sleep};
 use tracing::{error, info};
+
+use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
+use substrate_interface::Keypair;
+
 use crate::models::ComputationData;
 
 const VERSION_KEY: u64 = 1;
@@ -93,7 +95,7 @@ impl Drop for MemoryMappedStorage {
 struct ValidatorState {
     step: u64,
     hotkeys: Vec<AccountId>,
-    scores: Vec<f64>,
+    scores: Vec<u16>,
 }
 
 pub struct Validator {
@@ -118,7 +120,7 @@ impl Validator {
     }
 
     fn not_registered(account_id: AccountId) -> ! {
-        panic!("Hotkey {account_id} is not registered in {}", config::NETUID);
+        panic!("Hotkey {account_id} is not registered in {}", *config::NETUID);
     }
 
     pub async fn new() -> Self {
@@ -127,20 +129,20 @@ impl Validator {
             &config::HOTKEY_NAME,
         ).unwrap();
 
-        let subtensor = Subtensor::new(&config::CHAIN_ENDPOINT).unwrap();
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(config::NETUID).unwrap();
+        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
         let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
 
         let uid = if let Some(neuron_info) = neuron_info {
-            neuron_info.uid
+            neuron_info.uid.0
         } else {
             Self::not_registered(keypair.account_id());
         };
 
         let hotkeys: Vec<String> = neurons.map(|neuron| neuron.hotkey);
-        let scores = vec![0.0; hotkeys.len()];
+        let scores = vec![0; hotkeys.len()];
 
         let state = ValidatorState {
             step: 1,
@@ -174,7 +176,7 @@ impl Validator {
             .join("miners")
             .join(&config::WALLET_NAME)
             .join(&config::HOTKEY_NAME)
-            .join(format!("netuid{}", config::NETUID))
+            .join(format!("netuid{}", *config::NETUID))
             .join("validator")
             .join("state.json")
     }
@@ -207,9 +209,14 @@ impl Validator {
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
-        self.neurons = self.subtensor.get_neurons(config::NETUID).await?;
+        self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
-        let block = block.unwrap_or_else(|| self.subtensor.get_block_number());
+        let block = if let Some(block) = block {
+            block
+        } else {
+            self.subtensor.get_block_number().await?
+        };
+
         self.last_metagraph_sync = block;
 
         let neuron_info = Self::find_neuron_info(&self.neurons, self.keypair.account_id());
@@ -220,18 +227,18 @@ impl Validator {
             Self::not_registered(self.keypair.account_id());
         };
 
-        self.uid = neuron_info.uid;
+        self.uid = neuron_info.uid.0;
 
         // Update scores array size if needed
         if self.state.hotkeys.len() != self.neurons.len() {
-            let mut new_scores = vec![0.0; self.neurons.len()];
+            let mut new_scores = vec![0; self.neurons.len()];
             new_scores[..self.state.scores.len()].copy_from_slice(&self.state.scores);
             self.state.scores = new_scores;
         }
 
         // Set weights if enough time has passed
-        if block - neuron_info.last_update >= config::EPOCH_LENGTH {
-            self.subtensor.set_weights(*config::NETUID, self.state.scores.iter().enumerate().collect(), VERSION_KEY)?;
+        if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
+            self.subtensor.set_weights(*config::NETUID, self.state.scores.iter().enumerate().map(|(uid, &score)| (uid as u16, score)).collect(), VERSION_KEY).await?;
         }
 
         Ok(())
@@ -287,14 +294,14 @@ impl Validator {
             match result {
                 Ok((response, inference_time)) => {
                     if let Ok(data) = response.json::<ComputationData>().await {
-                        self.state.scores[uid as usize] = 1.0 / inference_time;
+                        self.state.scores[uid as usize] = (u16::MAX / inference_time) as u16;
                         responses.push(data.parts);
                     } else {
-                        self.state.scores[uid as usize] = 0.0;
+                        self.state.scores[uid as usize] = 0;
                     }
                 }
                 Err(_) => {
-                    self.state.scores[uid as usize] = 0.0;
+                    self.state.scores[uid as usize] = 0;
                 }
             }
         }
@@ -305,7 +312,7 @@ impl Validator {
                 .map(|v| Simd::from_array(v.try_into().unwrap()))
                 .collect();
 
-            let normalized = self.normalize_response_data(&mut simd_data);
+            let normalized = Self::normalize_response_data(&mut simd_data);
             self.current_row = Array1::from_vec(normalized.into_iter().map(|x| x as u64).collect());
 
             let bit_index = self.state.step % 64;
