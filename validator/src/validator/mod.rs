@@ -5,32 +5,47 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::simd::Simd;
 use std::sync::Arc;
-
+use std::time::Duration;
 use anyhow::Result;
-use dirs;
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
+use tokio::time::sleep;
 use tracing::{error, info};
 
-use neuron::{AccountId, config, hotkey_location, Keypair, load_key_seed, NeuronInfoLite, Subtensor};
+use neuron::{
+    config, hotkey_location, load_key_seed, AccountId, Keypair, NeuronInfoLite, Subtensor,
+};
 
-use crate::validator::memory_storage::{MemoryMappedFile, MemoryMappedStorage};
+use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
 
 mod memory_storage;
 
 const VERSION_KEY: u64 = 1;
+const GROW_BY: u64 = 1024 * 1024 * 8;
 
 struct CurrentRow(Arc<UnsafeCell<MemoryMappedStorage>>);
 
 impl CurrentRow {
-    fn new(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self(Arc::new(UnsafeCell::new(MemoryMappedStorage::new(path)?))))
-    }
-
     unsafe fn share(&self) -> Self {
         Self(self.0.clone())
+    }
+}
+
+impl MemoryMapped for CurrentRow {
+    fn open(path: impl AsRef<Path>, initial_capacity: u64) -> std::io::Result<Self> {
+        Ok(Self(Arc::new(UnsafeCell::new(MemoryMappedStorage::open(
+            path,
+            initial_capacity,
+        )?))))
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        self.deref().flush()
+    }
+
+    fn ensure_capacity(&mut self, capacity: u64) -> std::io::Result<()> {
+        self.deref_mut().ensure_capacity(capacity)
     }
 }
 
@@ -50,11 +65,33 @@ impl DerefMut for CurrentRow {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
+struct KeyInfo {
+    hotkey: AccountId,
+    score: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ValidatorState {
     step: u64,
-    hotkeys: Vec<AccountId>,
-    scores: Vec<u16>,
+    key_info: Vec<KeyInfo>,
+}
+
+impl ValidatorState {
+    fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
+        let key_info = hotkeys.map(|hotkey| KeyInfo { hotkey, score: 0 }).collect();
+
+        Self { step: 1, key_info }
+    }
+}
+
+impl Default for ValidatorState {
+    fn default() -> Self {
+        Self {
+            step: 1,
+            key_info: Vec::new(),
+        }
+    }
 }
 
 pub struct Validator {
@@ -87,8 +124,28 @@ impl Validator {
         );
     }
 
+    fn step_to_grow_to(step: u64) -> u64 {
+        let step = step + 1;
+        let remainder = step % GROW_BY;
+
+        if remainder == 0 {
+            step
+        } else {
+            step - remainder + GROW_BY
+        }
+    }
+
+    fn current_row_file_size(step: u64) -> u64 {
+        (Self::step_to_grow_to(step) * 2 + 1) / 7 + 1
+    }
+
+    fn center_column_file_size(step: u64) -> u64 {
+        Self::step_to_grow_to(step) / 7 + 1
+    }
+
     pub async fn new() -> Self {
-        let hotkey_location = hotkey_location(&*config::WALLET_NAME, &*config::HOTKEY_NAME).expect("No home directory found");
+        let hotkey_location = hotkey_location(&*config::WALLET_NAME, &*config::HOTKEY_NAME)
+            .expect("No home directory found");
         let seed = load_key_seed(&hotkey_location).unwrap();
 
         let keypair = Keypair::from_seed(&seed).unwrap();
@@ -106,19 +163,26 @@ impl Validator {
             Self::not_registered(keypair.account_id());
         };
 
-        let hotkeys: Vec<AccountId> = neurons.iter().map(|neuron| neuron.hotkey.clone()).collect();
-        let scores = vec![0; hotkeys.len()];
+        let state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
 
-        let state = ValidatorState {
-            step: 1,
-            scores,
-            hotkeys,
-        };
+        fs::create_dir("state").unwrap();
 
-        let current_row = CurrentRow::new("current_row.bin").unwrap();
-        let center_column = MemoryMappedFile::open("center_column.bin").unwrap();
+        let mut current_row =
+            CurrentRow::open("state/current_row.bin", Self::current_row_file_size(state.step)).unwrap();
 
-        let mut validator = Self {
+        let mut center_column = MemoryMappedFile::open(
+            "state/center_column.bin",
+            Self::center_column_file_size(state.step),
+        )
+        .unwrap();
+
+        if state.step == 1 {
+            // Initial state
+            current_row[0] = 1;
+            center_column[0] = 1;
+        }
+
+        Self {
             keypair,
             subtensor,
             neurons,
@@ -128,35 +192,15 @@ impl Validator {
             state,
             last_metagraph_sync,
             thread_pool: ThreadPool::new(256),
-        };
-
-        validator.load_state().unwrap();
-
-        if validator.state.step == 1 {
-            // Initial state
-            validator.current_row[0] = 1;
-            validator.center_column[0] = 1;
         }
-
-        validator
     }
 
-    fn state_path(&self) -> PathBuf {
-        let mut dir = dirs::home_dir().expect("Could not find home directory");
-
-        dir.push(".bittensor");
-        dir.push("miners");
-        dir.push(&*config::WALLET_NAME);
-        dir.push(&*config::HOTKEY_NAME);
-        dir.push(format!("netuid{}", *config::NETUID));
-        dir.push("validator");
-        dir.push("state.json");
-
-        dir
+    fn state_path() -> PathBuf {
+        PathBuf::from("state/data.json")
     }
 
     fn save_state(&self) -> Result<()> {
-        let path = self.state_path();
+        let path = Self::state_path();
 
         self.center_column.flush()?;
         self.current_row.flush()?;
@@ -172,17 +216,16 @@ impl Validator {
         Ok(())
     }
 
-    fn load_state(&mut self) -> Result<()> {
-        let path = self.state_path();
+    fn load_state(hotkeys: impl Iterator<Item = AccountId>) -> Result<ValidatorState> {
+        let path = Self::state_path();
+
         if !path.exists() {
-            return Ok(());
+            return Ok(ValidatorState::for_hotkeys(hotkeys));
         }
 
         let json = fs::read_to_string(&path)?;
 
-        self.state = serde_json::from_str(&json)?;
-
-        Ok(())
+        Ok(serde_json::from_str(&json)?)
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
@@ -207,10 +250,15 @@ impl Validator {
         self.uid = neuron_info.uid.0;
 
         // Update scores array size if needed
-        if self.state.hotkeys.len() != self.neurons.len() {
-            let mut new_scores = vec![0; self.neurons.len()];
-            new_scores[..self.state.scores.len()].copy_from_slice(&self.state.scores);
-            self.state.scores = new_scores;
+        if self.state.key_info.len() != self.neurons.len() {
+            let mut uid_iterator = (self.state.key_info.len()..self.neurons.len()).into_iter();
+
+            self.state
+                .key_info
+                .resize_with(self.neurons.len(), || KeyInfo {
+                    hotkey: self.neurons[uid_iterator.next().unwrap()].hotkey.clone(),
+                    score: 0,
+                });
         }
 
         // Set weights if enough time has passed
@@ -220,10 +268,10 @@ impl Validator {
                     &self.keypair,
                     *config::NETUID,
                     self.state
-                        .scores
+                        .key_info
                         .iter()
                         .enumerate()
-                        .map(|(uid, &score)| (uid as u16, score))
+                        .map(|(uid, &ref info)| (uid as u16, info.score))
                         .collect(),
                     VERSION_KEY,
                 )
@@ -233,19 +281,46 @@ impl Validator {
         Ok(())
     }
 
-    fn handle_connection(mut current_row: CurrentRow, mut connection: TcpStream, start: usize, end: usize) {
+    fn handle_connection(
+        mut current_row: CurrentRow,
+        mut connection: TcpStream,
+        start: u64,
+        end: u64,
+    ) {
         let buffer_size = min(end - start, 8 * 4 * 512);
 
         let iterations = (end - start) / buffer_size;
 
         for i in 0..iterations {
-            let from = start + i * buffer_size;
-            let to = start + (i + 1) * buffer_size;
+            let from = (start + i * buffer_size) as usize;
+            let to = (start + (i + 1) * buffer_size) as usize;
 
             // TODO error handle
             connection.write(&current_row[from..to]).unwrap();
             connection.read(&mut current_row[from..to]).unwrap();
         }
+    }
+
+    fn connect_to_miners(&self) -> Vec<TcpStream> {
+        let mut connections = Vec::with_capacity(256);
+
+        for neuron in &self.neurons {
+            let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
+                Ipv4Addr::from(neuron.axon_info.ip as u32).into()
+            } else {
+                Ipv6Addr::from(neuron.axon_info.ip).into()
+            };
+
+            let address = SocketAddr::new(ip, neuron.axon_info.port);
+
+            info!("Attempting to connect to {address}");
+
+            if let Ok(stream) = TcpStream::connect(address) {
+                connections.push(stream);
+            }
+        }
+
+        connections
     }
 
     async fn do_step(&mut self) -> Result<()> {
@@ -258,27 +333,23 @@ impl Validator {
             self.sync(Some(current_block)).await?;
         }
 
-        let mut connections = Vec::with_capacity(256);
+        self.current_row.ensure_capacity(Self::current_row_file_size(self.state.step))?;
+        self.center_column.ensure_capacity(Self::center_column_file_size(self.state.step))?;
 
-        for neuron in &self.neurons {
-            let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
-                Ipv4Addr::from(neuron.axon_info.ip as u32).into()
-            } else {
-                Ipv6Addr::from(neuron.axon_info.ip).into()
-            };
+        let mut connections = self.connect_to_miners();
 
-            let address = SocketAddr::new(ip, neuron.axon_info.port);
-
-            if let Ok(stream) = TcpStream::connect(address) {
-                connections.push(stream);
-            }
+        while connections.is_empty() {
+            info!("No miners found, waiting 60 seconds");
+            sleep(Duration::from_secs(60)).await;
+            connections = self.connect_to_miners();
         }
 
-        let connection_count = connections.len();
-        let byte_count = (self.state.step / 4 + 1) as usize;
+        let connection_count = connections.len() as u64;
+
+        let byte_count = (self.state.step * 2 + 1) / 7 + 1;
 
         let chunk_size = if connection_count % 2 == 0 {
-            byte_count / connection_count + 1
+            byte_count / (connection_count + 1)
         } else {
             byte_count / connection_count
         };
@@ -289,11 +360,39 @@ impl Validator {
                 // SAFETY: This is safe as the data read/written does not overlap between threads
                 let row = self.current_row.share();
 
-                self.thread_pool.execute(move || Self::handle_connection(row, connection, index * chunk_size, (index + 1) * chunk_size));
+                self.thread_pool.execute(move || {
+                    Self::handle_connection(
+                        row,
+                        connection,
+                        index as u64 * chunk_size,
+                        (index as u64 + 1) * chunk_size,
+                    )
+                });
             }
         }
 
         self.thread_pool.join();
+
+        for i in 1..connection_count {
+            let end = ((i + 1) * chunk_size) as usize;
+
+            let [a, b] = self.current_row[end..end+1] else {
+                unreachable!()
+            };
+
+            let (a, b) = Self::normalize_pair(a, b);
+
+            self.current_row[end..end+1].copy_from_slice(&[a, b]);
+        }
+
+        let last_bits = (self.state.step % 2) as u8 * 2 + 1;
+        self.current_row[(connection_count * chunk_size) as usize] = last_bits;
+
+        let bit_index = self.state.step % 8;
+        let part = self.state.step / 8;
+        let current_row_part = (self.current_row[part as usize] >> bit_index) & 0b1;
+
+        self.center_column[part as usize] |= current_row_part << bit_index;
 
         self.state.step += 1;
         self.save_state()?;
@@ -312,57 +411,20 @@ impl Validator {
         }
     }
 
-    fn normalize_response_data(lists: &mut [Simd<u8, 32>]) -> Vec<u8> {
-        fn rule_30(a: u64) -> u64 {
+    fn normalize_pair(a: u8, b: u8) -> (u8, u8) {
+        fn rule_30(a: u8) -> u8 {
             a ^ ((a << 1) | (a << 2))
         }
 
-        fn normalize_pair(a: u8, b: u8) -> (u8, u8) {
-            // Convert u8 to u64 for processing
-            let (new_a, new_b) = {
-                let a = a as u64;
-                let b = b as u64;
-                let carry = a & 1;
-                let mut a = a >> 1;
-                let mut b = (carry << 63) | b;
-                a = rule_30(a);
-                b = rule_30(b);
-                let msb = b >> 63;
-                b &= (1 << 63) - 1;
-                a = (a << 1) | msb;
-                (a as u8, b as u8) // Convert back to u8
-            };
-            (new_a, new_b)
-        }
+        let carry = a & 1;
+        let mut a = a >> 1;
+        let mut b = (carry << 7) | b;
+        a = rule_30(a);
+        b = rule_30(b);
+        let msb = b >> 7;
+        b &= (1 << 7) - 1;
+        a = (a << 1) | msb;
 
-        let mut normalized_outputs = Vec::new();
-
-        // Process lists
-        for i in 0..lists.len() - 1 {
-            let mut current_list = lists[i].to_array();
-            let mut next_list = lists[i + 1].to_array();
-
-            let (new_last, new_first) = normalize_pair(
-                current_list[31], // last element of current list
-                next_list[0],     // first element of next list
-            );
-
-            current_list[31] = new_last;
-            next_list[0] = new_first;
-
-            // Update the lists with normalized values
-            lists[i] = Simd::from_array(current_list);
-            lists[i + 1] = Simd::from_array(next_list);
-
-            // Extend normalized_outputs with current list
-            normalized_outputs.extend_from_slice(&current_list);
-        }
-
-        // Add the last list if there was more than one list
-        if lists.len() > 1 {
-            normalized_outputs.extend_from_slice(&lists[lists.len() - 1].to_array());
-        }
-
-        normalized_outputs
+        (a, b)
     }
 }

@@ -1,29 +1,28 @@
-use std::{fs, io};
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::{fs, io::Result};
 
-use anyhow::Result;
 use memmap2::{MmapMut, MmapOptions};
+
+pub trait MemoryMapped {
+    fn open(path: impl AsRef<Path>, initial_capacity: u64) -> Result<Self>
+    where
+        Self: Sized;
+
+    fn flush(&self) -> Result<()>;
+
+    fn ensure_capacity(&mut self, capacity: u64) -> Result<()>;
+}
 
 pub struct MemoryMappedFile {
     mmap: MmapMut,
+    file: File,
     path: PathBuf,
-    _file: File,
 }
 
 impl MemoryMappedFile {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-
-        Ok(Self::new(file, path))
-    }
-
-    pub fn new(file: File, path: impl AsRef<Path>) -> Self {
+    fn new(file: File, path: impl AsRef<Path>) -> Self {
         // SAFETY: This would typically not be safe as this is technically a self-referential
         //  struct. Mmap is using a reference of `&file` without a lifetime.
         //  However, this works as mmap uses the file descriptor internally,
@@ -33,13 +32,35 @@ impl MemoryMappedFile {
 
         Self {
             mmap,
+            file,
             path: path.as_ref().to_path_buf(),
-            _file: file,
         }
     }
+}
 
-    pub fn flush(&self) -> io::Result<()> {
+impl MemoryMapped for MemoryMappedFile {
+    fn open(path: impl AsRef<Path>, capacity: u64) -> Result<Self> {
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+
+        file.set_len(capacity)?;
+
+        Ok(Self::new(file, path))
+    }
+
+    fn flush(&self) -> Result<()> {
         self.mmap.flush()
+    }
+
+    fn ensure_capacity(&mut self, capacity: u64) -> Result<()> {
+        self.file.set_len(capacity)?;
+
+        self.mmap = unsafe { MmapOptions::new().map_mut(&self.file) }.unwrap();
+
+        Ok(())
     }
 }
 
@@ -62,8 +83,8 @@ pub struct MemoryMappedStorage {
     storage_path: PathBuf,
 }
 
-impl MemoryMappedStorage {
-    pub fn new(storage_path: impl AsRef<Path>) -> Result<Self> {
+impl MemoryMapped for MemoryMappedStorage {
+    fn open(storage_path: impl AsRef<Path>, initial_capacity: u64) -> Result<Self> {
         let mut swap_path = PathBuf::new();
 
         swap_path.push(&storage_path);
@@ -75,16 +96,10 @@ impl MemoryMappedStorage {
         swap_path.push(file_name);
 
         if fs::exists(&storage_path)? {
-            fs::rename(&storage_path, &swap_path)?;
+            fs::copy(&storage_path, &swap_path)?;
         }
 
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&swap_path)?;
-
-        let memory_mapped_swap_file = MemoryMappedFile::new(file, swap_path);
+        let memory_mapped_swap_file = MemoryMappedFile::open(swap_path, initial_capacity).unwrap();
 
         Ok(Self {
             swap_file: memory_mapped_swap_file,
@@ -92,11 +107,15 @@ impl MemoryMappedStorage {
         })
     }
 
-    pub fn flush(&self) -> Result<()> {
+    fn flush(&self) -> Result<()> {
         self.swap_file.mmap.flush()?;
-        fs::rename(&self.swap_file.path, &self.storage_path)?;
+        fs::copy(&self.swap_file.path, &self.storage_path)?;
 
         Ok(())
+    }
+
+    fn ensure_capacity(&mut self, capacity: u64) -> Result<()> {
+        self.swap_file.ensure_capacity(capacity)
     }
 }
 

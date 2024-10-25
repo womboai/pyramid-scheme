@@ -177,7 +177,7 @@ impl Miner {
 
     async fn run(&mut self) {
         let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
-        let listener = TcpListener::bind((ip, 8091)).unwrap();
+        let listener = TcpListener::bind((ip, 8000)).unwrap();
         let pool = ThreadPool::new(32);
 
         listener.set_nonblocking(true).unwrap();
