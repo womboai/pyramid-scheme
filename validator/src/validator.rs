@@ -14,8 +14,7 @@ use tracing::{error, info};
 
 use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
 use substrate_interface::Keypair;
-
-use crate::models::ComputationData;
+use dirs;
 
 const VERSION_KEY: u64 = 1;
 
@@ -50,7 +49,7 @@ impl MemoryMappedStorage {
     fn new(storage_path: impl AsRef<Path>) -> Self {
         let temporary_file_path = NamedTempFile::new().unwrap();
 
-        fs::rename(&storage_path, &temporary_file_path);
+        fs::rename(&storage_path, &temporary_file_path).unwrap();
 
         let memored_mapped_temporary_file = MemoryMappedFile::new(temporary_file_path.reopen().unwrap(), temporary_file_path.path().to_owned());
 
@@ -96,7 +95,6 @@ pub struct Validator {
     subtensor: Subtensor,
     neurons: Vec<NeuronInfoLite>,
     uid: u16,
-    client: Client,
 
     current_row: MemoryMappedStorage,
     center_column: MemoryMappedStorage,
@@ -151,7 +149,6 @@ impl Validator {
             subtensor,
             neurons,
             uid,
-            client: Client::new(),
             current_row,
             center_column,
             state,
@@ -260,7 +257,7 @@ impl Validator {
             let address = SocketAddr::new(ip, neuron.axon_info.port);
 
             if let Ok(stream) = TcpStream::connect(address) {
-                thread_pool
+                // TODO
             }
         }
 
