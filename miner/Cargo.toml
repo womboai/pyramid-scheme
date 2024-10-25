@@ -11,4 +11,4 @@ path = "src/main.rs"
 log = { workspace = true }
 tokio = { workspace = true }
 
-subtensor-chain = { path = "../base" }
+rule-30-solver-neuron = { path = "../base" }

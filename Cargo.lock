@@ -2315,7 +2315,20 @@ name = "rule-30-solver-miner"
 version = "0.1.0"
 dependencies = [
  "log",
- "subtensor-chain",
+ "rule-30-solver-neuron",
+ "tokio",
+]
+
+[[package]]
+name = "rule-30-solver-neuron"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "parity-scale-codec",
+ "subxt",
+ "subxt-codegen",
+ "subxt-metadata",
  "tokio",
 ]
 
@@ -2326,9 +2339,9 @@ dependencies = [
  "anyhow",
  "memmap2",
  "reqwest",
+ "rule-30-solver-neuron",
  "serde",
  "serde_json",
- "subtensor-chain",
  "tempfile",
  "tokio",
  "tracing",
@@ -3097,19 +3110,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "subtensor-chain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "parity-scale-codec",
- "subxt",
- "subxt-codegen",
- "subxt-metadata",
- "tokio",
-]
 
 [[package]]
 name = "subtle"

@@ -9,11 +9,10 @@ use memmap2::{MmapMut, MmapOptions};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use substrate_interface::Keypair;
-use subtensor_chain::{AccountId, NeuronInfoLite, Subtensor};
+use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
 use tempfile::{tempfile, NamedTempFile};
 use tokio::time::{Duration, sleep};
-use tracing::error;
-use crate::config::{self, EPOCH_LENGTH, WANDB_REFRESH_INTERVAL};
+use tracing::{error, info};
 use crate::models::ComputationData;
 
 struct MemoryMappedFile {
@@ -99,25 +98,45 @@ pub struct Validator {
     keypair: Keypair,
     subtensor: Subtensor,
     neurons: Vec<NeuronInfoLite>,
+    uid: u16,
     client: Client,
 
     current_row: MemoryMappedStorage,
     center_column: MemoryMappedStorage,
     state: ValidatorState,
 
-    last_metagraph_sync: u32,
+    last_metagraph_sync: u64,
 }
 
 impl Validator {
+    fn find_uid(neurons: &[NeuronInfoLite], account_id: AccountId) -> Option<u16> {
+        neurons
+            .iter()
+            .find(|neuron| neuron.hotkey == account_id)
+            .map(|neuron| neuron.uid.0)
+    }
+
+    fn not_registered(account_id: AccountId) -> ! {
+        panic!("Hotkey {account_id} is not registered in {}", config::NETUID);
+    }
+
     pub async fn new() -> Self {
         let keypair = load_hotkey_keypair(
             &config::WALLET_NAME,
             &config::HOTKEY_NAME,
         ).unwrap();
 
-        let subtensor = Subtensor::new(&config::SUBTENSOR_ADDRESS).unwrap();
+        let subtensor = Subtensor::new(&config::CHAIN_ENDPOINT).unwrap();
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(config::NETUID).unwrap();
+
+        let uid = Self::find_uid(&neurons, keypair.account_id());
+
+        let uid = if let Some(uid) = uid {
+            uid;
+        } else {
+            Self::not_registered(keypair.account_id());
+        };
 
         let hotkeys: Vec<String> = neurons.map(|neuron| neuron.hotkey);
         let scores = vec![0.0; hotkeys.len()];
@@ -135,6 +154,7 @@ impl Validator {
             keypair,
             subtensor,
             neurons,
+            uid,
             client: Client::new(),
             current_row,
             center_column,
@@ -185,32 +205,30 @@ impl Validator {
         Ok(())
     }
 
-    fn check_registered(&self) -> Result<()> {
-        if !self.metagraph.nodes.contains_key(&self.keypair.ss58_address()) {
-            panic!("Hotkey {} is not registered in {}", self.keypair.ss58_address(), self.metagraph.netuid);
-        }
+    async fn sync(&mut self, block: Option<u64>) -> Result<()> {
+        self.neurons = self.subtensor.get_neurons(config::NETUID).await?;
 
-        Ok(())
-    }
-
-    async fn sync(&mut self, block: Option<u32>) -> Result<()> {
-        self.metagraph.sync_nodes().await?;
-
-        let block = block.unwrap_or_else(|| self.substrate.get_block_number());
+        let block = block.unwrap_or_else(|| self.subtensor.get_block_number());
         self.last_metagraph_sync = block;
 
-        self.check_registered()?;
+        let uid = Self::find_uid(&self.neurons, self.keypair.account_id());
+
+        if let Some(uid) = uid {
+            self.uid = uid;
+        } else {
+            Self::not_registered(self.keypair.account_id());
+        }
 
         // Update scores array size if needed
-        if self.state.hotkeys.len() != self.metagraph.nodes.len() {
-            let mut new_scores = vec![0.0; self.metagraph.nodes.len()];
-            new_scores[..self.scores.len()].copy_from_slice(&self.scores);
+        if self.state.hotkeys.len() != self.neurons.len() {
+            let mut new_scores = vec![0.0; self.neurons.len()];
+            new_scores[..self.state.scores.len()].copy_from_slice(&self.state.scores);
             self.state.scores = new_scores;
         }
 
         // Set weights if enough time has passed
-        let node = &self.metagraph.nodes[&self.keypair.ss58_address()];
-        if block - node.last_updated >= EPOCH_LENGTH {
+        let node = &self.neurons[&self.keypair.ss58_address()];
+        if block - node.last_updated >= config::EPOCH_LENGTH {
             self.set_weights()?;
         }
 
@@ -218,12 +236,12 @@ impl Validator {
     }
 
     async fn do_step(&mut self) -> Result<()> {
-        log::info!("Evolution step {}", self.state.step);
+        info!("Evolution step {}", self.state.step);
 
-        let current_block = self.substrate.get_block_number();
+        let current_block = self.subtensor.get_block_number().await?;
         let elapsed_blocks = current_block - self.last_metagraph_sync;
 
-        if elapsed_blocks >= EPOCH_LENGTH {
+        if elapsed_blocks >= config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
 
@@ -253,7 +271,7 @@ impl Validator {
         let futures: Vec<_> = chunks.into_iter().map(|(uid, chunk)| {
             let data = ComputationData { parts: chunk };
             async move {
-                let node = &self.metagraph.nodes[&self.hotkeys[uid as usize]];
+                let node = &self.neurons[&self.hotkeys[uid as usize]];
                 let result = self.make_request(node, "compute", Some(&data)).await;
                 (uid, result)
             }
@@ -267,14 +285,14 @@ impl Validator {
             match result {
                 Ok((response, inference_time)) => {
                     if let Ok(data) = response.json::<ComputationData>().await {
-                        self.scores[uid as usize] = 1.0 / inference_time;
+                        self.state.scores[uid as usize] = 1.0 / inference_time;
                         responses.push(data.parts);
                     } else {
-                        self.scores[uid as usize] = 0.0;
+                        self.state.scores[uid as usize] = 0.0;
                     }
                 }
                 Err(_) => {
-                    self.scores[uid as usize] = 0.0;
+                    self.state.scores[uid as usize] = 0.0;
                 }
             }
         }
@@ -303,11 +321,8 @@ impl Validator {
 
     pub(crate) async fn run(&mut self) {
         loop {
-            {
-                println!("Hello World");
-                if let Err(e) = match self.do_step().await {
-                    error!("Error during evolution step {step}, {e}", step=self.state.step)
-                }
+            if let Err(e) = self.do_step().await {
+                error!("Error during evolution step {step}, {e}", step=self.state.step);
             }
         }
     }

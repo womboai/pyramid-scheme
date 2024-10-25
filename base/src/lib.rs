@@ -3,6 +3,8 @@ use parity_scale_codec::{Compact, Decode};
 use subxt::client::{OfflineClientT, OnlineClient, OnlineClientT};
 use subxt::{Config, SubstrateConfig};
 
+pub mod config;
+
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
 type SubtensorConfig = SubstrateConfig;
@@ -78,7 +80,7 @@ impl Subtensor {
         Ok(Vec::<NeuronInfoLite>::decode(&mut response.as_ref())?)
     }
 
-    pub fn set_weights(
+    pub async fn set_weights(
         &self,
         netuid: u16,
         weights: Vec<(u16, u16)>,

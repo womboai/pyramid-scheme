@@ -21,4 +21,4 @@ tracing = "0.1.40"
 tempfile = "3.13.0"
 memmap2 = "0.9.5"
 
-subtensor-chain = { path = "../base" }
+rule-30-solver-neuron = { path = "../base" }

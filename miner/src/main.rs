@@ -4,12 +4,11 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
 use std::slice;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::{error, info};
-use subtensor_chain::Subtensor;
+use neuron::{config, Subtensor};
 use threadpool::ThreadPool;
-use tokio::time::Instant;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
@@ -137,15 +136,16 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
     }
 }
 
+#[tokio::main]
 async fn main() {
-    let subtensor = Subtensor::new(config::SUBTENSOR_URL).await.unwrap();
+    let subtensor = Subtensor::new(&config::CHAIN_ENDPOINT).await.unwrap();
 
     let mut current_block = subtensor.get_block_number().await.unwrap();
     let mut last_block_fetch = Instant::now();
 
-    let mut metagraph_sync = current_block;
+    let mut last_metagraph_sync = current_block;
 
-    let mut neurons = subtensor.get_neurons().await.unwrap();
+    let mut neurons = subtensor.get_neurons(config::NETUID).await.unwrap();
 
     let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
     let listener = TcpListener::bind((ip, 8091)).unwrap();
@@ -154,11 +154,15 @@ async fn main() {
     listener.set_nonblocking(true).unwrap();
 
     loop {
-        if Instant::now() - last_block_fetch >= 12 {
-            current_block = subtensor.get_block_number().await?;
+        let now = Instant::now();
 
-            if current_block - metagraph_sync >= config::EPOCH_LENGTH {
-                neurons = subtensor.get_neurons().await?;
+        if now - last_block_fetch >= Duration::from_secs(12) {
+            current_block = subtensor.get_block_number().await?;
+            last_block_fetch = now;
+
+            if current_block - last_metagraph_sync >= config::EPOCH_LENGTH {
+                neurons = subtensor.get_neurons(config::NETUID).await?;
+                last_metagraph_sync = current_block;
             }
         }
 
