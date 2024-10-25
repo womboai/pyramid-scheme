@@ -47,7 +47,9 @@ impl MemoryMappedStorage {
     fn new(storage_path: impl AsRef<Path>) -> Self {
         let temporary_file_path = NamedTempFile::new().unwrap();
 
-        fs::rename(&storage_path, &temporary_file_path).unwrap();
+        if fs::exists(&storage_path).unwrap() {
+            fs::rename(&storage_path, &temporary_file_path).unwrap();
+        }
 
         let memored_mapped_temporary_file = MemoryMappedFile::new(
             temporary_file_path.reopen().unwrap(),
@@ -112,7 +114,7 @@ impl Validator {
 
     fn not_registered(account_id: &AccountId) -> ! {
         panic!(
-            "Hotkey {account_id} is not registered in {}",
+            "Hotkey {account_id} is not registered in sn{}",
             *config::NETUID
         );
     }
@@ -164,14 +166,17 @@ impl Validator {
     }
 
     fn state_path(&self) -> PathBuf {
-        let home = dirs::home_dir().expect("Could not find home directory");
-        home.join(".bittensor")
-            .join("miners")
-            .join(&*config::WALLET_NAME)
-            .join(&*config::HOTKEY_NAME)
-            .join(format!("netuid{}", *config::NETUID))
-            .join("validator")
-            .join("state.json")
+        let mut dir = dirs::home_dir().expect("Could not find home directory");
+
+        dir.push(".bittensor");
+        dir.push("miners");
+        dir.push(&*config::WALLET_NAME);
+        dir.push(&*config::HOTKEY_NAME);
+        dir.push(format!("netuid{}", *config::NETUID));
+        dir.push("validator");
+        dir.push("state.json");
+
+        dir
     }
 
     fn save_state(&self) -> Result<()> {
