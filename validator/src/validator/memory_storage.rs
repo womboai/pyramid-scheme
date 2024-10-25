@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use memmap2::{MmapMut, MmapOptions};
-use tempfile::NamedTempFile;
 
 pub struct MemoryMappedFile {
     mmap: MmapMut,
@@ -15,7 +14,13 @@ pub struct MemoryMappedFile {
 
 impl MemoryMappedFile {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self::new(File::open(&path)?, path))
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+
+        Ok(Self::new(file, path))
     }
 
     pub fn new(file: File, path: impl AsRef<Path>) -> Self {
@@ -53,32 +58,43 @@ impl DerefMut for MemoryMappedFile {
 }
 
 pub struct MemoryMappedStorage {
-    temporary_file: MemoryMappedFile,
+    swap_file: MemoryMappedFile,
     storage_path: PathBuf,
 }
 
 impl MemoryMappedStorage {
     pub fn new(storage_path: impl AsRef<Path>) -> Result<Self> {
-        let temporary_file_path = NamedTempFile::new()?;
+        let mut swap_path = PathBuf::new();
+
+        swap_path.push(&storage_path);
+
+        let mut file_name = swap_path.file_name().unwrap().to_owned();
+        file_name.push(".swap");
+
+        swap_path.pop();
+        swap_path.push(file_name);
 
         if fs::exists(&storage_path)? {
-            fs::rename(&storage_path, &temporary_file_path)?;
+            fs::rename(&storage_path, &swap_path)?;
         }
 
-        let memored_mapped_temporary_file = MemoryMappedFile::new(
-            temporary_file_path.reopen()?,
-            temporary_file_path.path().to_owned(),
-        );
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&swap_path)?;
+
+        let memory_mapped_swap_file = MemoryMappedFile::new(file, swap_path);
 
         Ok(Self {
-            temporary_file: memored_mapped_temporary_file,
+            swap_file: memory_mapped_swap_file,
             storage_path: storage_path.as_ref().to_path_buf(),
         })
     }
 
     pub fn flush(&self) -> Result<()> {
-        self.temporary_file.mmap.flush()?;
-        fs::rename(&self.temporary_file.path, &self.storage_path)?;
+        self.swap_file.mmap.flush()?;
+        fs::rename(&self.swap_file.path, &self.storage_path)?;
 
         Ok(())
     }
@@ -88,12 +104,12 @@ impl Deref for MemoryMappedStorage {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.temporary_file
+        &self.swap_file
     }
 }
 
 impl DerefMut for MemoryMappedStorage {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.temporary_file
+        &mut self.swap_file
     }
 }

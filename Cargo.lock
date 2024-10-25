@@ -7670,7 +7670,6 @@ dependencies = [
  "rule-30-solver-neuron",
  "serde",
  "serde_json",
- "tempfile",
  "threadpool",
  "tokio",
  "tracing",
