@@ -22,12 +22,15 @@ mod memory_storage;
 
 const VERSION_KEY: u64 = 1;
 
-#[derive(Clone)]
 struct CurrentRow(Arc<UnsafeCell<MemoryMappedStorage>>);
 
 impl CurrentRow {
     fn new(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self(Arc::new(UnsafeCell::new(MemoryMappedStorage::new(path)?))))
+    }
+
+    unsafe fn share(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -282,9 +285,12 @@ impl Validator {
 
         // TODO Handle connection prematurely dying or giving invalid results
         for (index, connection) in connections.into_iter().enumerate() {
-            let row = self.current_row.clone();
+            unsafe {
+                // SAFETY: This is safe as the data read/written does not overlap between threads
+                let row = self.current_row.share();
 
-            self.thread_pool.execute(move || Self::handle_connection(row, connection, index * chunk_size, (index + 1) * chunk_size));
+                self.thread_pool.execute(move || Self::handle_connection(row, connection, index * chunk_size, (index + 1) * chunk_size));
+            }
         }
 
         self.thread_pool.join();
