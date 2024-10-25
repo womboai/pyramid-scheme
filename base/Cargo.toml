@@ -17,6 +17,8 @@ dirs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+thiserror = "1.0.65"
+
 parity-scale-codec = "3.0.0"
 subxt = { version = "0.38.0", features = ["jsonrpsee", "substrate-compat"] }
 hex = "0.4.3"

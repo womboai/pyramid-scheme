@@ -1,6 +1,5 @@
 use std::fs;
 use std::fs::File;
-use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -11,7 +10,6 @@ use dirs;
 use memmap2::{MmapMut, MmapOptions};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
-use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
 use neuron::{config, AccountId, NeuronInfoLite, Subtensor, hotkey_location, load_key_seed, Keypair};
@@ -20,8 +18,8 @@ const VERSION_KEY: u64 = 1;
 
 struct MemoryMappedFile {
     mmap: MmapMut,
-    file: File,
     path: PathBuf,
+    _file: File,
 }
 
 impl MemoryMappedFile {
@@ -34,8 +32,8 @@ impl MemoryMappedFile {
 
         Self {
             mmap,
-            file,
             path: path.as_ref().to_path_buf(),
+            _file: file,
         }
     }
 }
@@ -120,9 +118,7 @@ impl Validator {
     }
 
     pub async fn new() -> Self {
-        let mut seed_buf = [0u8; 32];
-
-        let hotkey_location = hotkey_location(&config::WALLET_NAME, &config::HOTKEY_NAME).expect("No home directory found");
+        let hotkey_location = hotkey_location(&*config::WALLET_NAME, &*config::HOTKEY_NAME).expect("No home directory found");
         let seed = load_key_seed(&hotkey_location).unwrap();
 
         let keypair = Keypair::from_seed(&seed).unwrap();
@@ -139,7 +135,7 @@ impl Validator {
             Self::not_registered(keypair.account_id());
         };
 
-        let hotkeys = neurons.iter().map(|neuron| neuron.hotkey).collect();
+        let hotkeys: Vec<AccountId> = neurons.iter().map(|neuron| neuron.hotkey.clone()).collect();
         let scores = vec![0; hotkeys.len()];
 
         let state = ValidatorState {
@@ -268,7 +264,7 @@ impl Validator {
 
         for neuron in &self.neurons {
             let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
-                Ipv4Addr::from(neuron.axon_info.ip).into()
+                Ipv4Addr::from(neuron.axon_info.ip as u32).into()
             } else {
                 Ipv6Addr::from(neuron.axon_info.ip).into()
             };

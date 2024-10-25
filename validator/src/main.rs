@@ -1,10 +1,7 @@
 #![feature(portable_simd)]
 
-use std::process;
-
 use tokio;
 use tracing::info;
-use tracing_subscriber::fmt;
 
 mod validator;
 

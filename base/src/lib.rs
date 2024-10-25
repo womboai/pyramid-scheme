@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -6,10 +7,11 @@ use anyhow::Result;
 use hex;
 use parity_scale_codec::{Compact, Decode};
 use serde_json::Value;
-use subxt::{Config, SubstrateConfig};
 use subxt::client::OnlineClient;
-use subxt::ext::sp_core::{Pair, sr25519};
+use subxt::ext::sp_core::{sr25519, Pair};
 use subxt::tx::PairSigner;
+use subxt::{Config, SubstrateConfig};
+use thiserror::Error;
 
 pub mod config;
 
@@ -65,6 +67,15 @@ pub struct Subtensor {
     client: OnlineClient<SubtensorConfig>,
 }
 
+#[derive(Error, Debug)]
+struct InvalidAccountJsonError(PathBuf);
+
+impl Display for InvalidAccountJsonError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("Invalid wallet account file: {:?}", self.0))
+    }
+}
+
 pub struct Keypair(PairSigner<SubtensorConfig, sr25519::Pair>);
 
 impl Deref for Keypair {
@@ -101,9 +112,15 @@ pub fn hotkey_location(
 }
 
 pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
-    let json: Value = serde_json::from_reader(File::open(path)?)?;
+    let json: Value = serde_json::from_reader(File::open(&path)?)?;
 
-    let seed = json.as_object()?.get("secretSeed")?.as_str().unwrap();
+    let seed = json
+        .as_object()
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?
+        .get("secretSeed")
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?
+        .as_str()
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?;
 
     let mut decoded = [0; 32];
     hex::decode_to_slice(&seed[2..], &mut decoded)?;

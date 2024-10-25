@@ -7655,6 +7655,7 @@ dependencies = [
  "subxt-codegen",
  "subxt-metadata",
  "subxt-utils-fetchmetadata",
+ "thiserror",
  "tokio",
  "tracing",
 ]
