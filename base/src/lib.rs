@@ -96,7 +96,7 @@ impl Subtensor {
         Ok(())
     }
 
-    pub fn get_block_number(&self) -> Result<u64> {
+    pub async fn get_block_number(&self) -> Result<u64> {
         Ok(self.client.blocks().at_latest().await?.number().into())
     }
 }

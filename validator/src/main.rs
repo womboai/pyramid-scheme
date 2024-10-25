@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 use std::process;
 
 use tokio;

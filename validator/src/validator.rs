@@ -218,7 +218,7 @@ impl Validator {
     }
 
     async fn do_step(&mut self) -> Result<()> {
-        log::info!("Evolution step {}", self.step);
+        log::info!("Evolution step {}", self.state.step);
 
         let current_block = self.substrate.get_block_number();
         let elapsed_blocks = current_block - self.last_metagraph_sync;
@@ -288,14 +288,14 @@ impl Validator {
             let normalized = self.normalize_response_data(&mut simd_data);
             self.current_row = Array1::from_vec(normalized.into_iter().map(|x| x as u64).collect());
 
-            let bit_index = self.step % 64;
-            let row_part = self.current_row[self.step as usize / 64];
+            let bit_index = self.state.step % 64;
+            let row_part = self.current_row[self.state.step as usize / 64];
 
             self.center_column[self.center_column.len() - 1] |=
                 (row_part >> bit_index) << bit_index;
         }
 
-        self.step += 1;
+        self.state.step += 1;
         self.save_state()?;
 
         Ok(())
@@ -306,7 +306,7 @@ impl Validator {
             {
                 println!("Hello World");
                 if let Err(e) = match self.do_step().await {
-                    error!("Error during evolution step {step}, {e}", step=self.step)
+                    error!("Error during evolution step {step}, {e}", step=self.state.step)
                 }
             }
         }
