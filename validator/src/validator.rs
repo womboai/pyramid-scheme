@@ -141,7 +141,7 @@ impl Validator {
             Self::not_registered(keypair.account_id());
         };
 
-        let hotkeys: Vec<String> = neurons.map(|neuron| neuron.hotkey);
+        let hotkeys = neurons.iter().map(|neuron| neuron.hotkey).collect();
         let scores = vec![0; hotkeys.len()];
 
         let state = ValidatorState {
