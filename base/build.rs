@@ -20,7 +20,10 @@ async fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let metadata_path = Path::new(&out_dir).join("metadata.rs");
 
-    let metadata_bytes = fetch_metadata::from_url(endpoint.try_into().unwrap(), MetadataVersion::Latest).await.unwrap();
+    let metadata_bytes =
+        fetch_metadata::from_url(endpoint.try_into().unwrap(), MetadataVersion::Latest)
+            .await
+            .unwrap();
     let mut metadata_bytes: &[u8] = &metadata_bytes;
     let metadata = Metadata::decode(&mut metadata_bytes).unwrap();
 

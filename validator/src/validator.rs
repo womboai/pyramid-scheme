@@ -1,5 +1,6 @@
 use std::fs;
 use std::fs::File;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -10,11 +11,10 @@ use dirs;
 use memmap2::{MmapMut, MmapOptions};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
-use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
-use substrate_interface::Keypair;
+use neuron::{config, AccountId, NeuronInfoLite, Subtensor, hotkey_location, load_key_seed, Keypair};
 
 const VERSION_KEY: u64 = 1;
 
@@ -51,12 +51,14 @@ impl MemoryMappedStorage {
 
         fs::rename(&storage_path, &temporary_file_path).unwrap();
 
-        let memored_mapped_temporary_file = MemoryMappedFile::new(temporary_file_path.reopen().unwrap(), temporary_file_path.path().to_owned());
+        let memored_mapped_temporary_file = MemoryMappedFile::new(
+            temporary_file_path.reopen().unwrap(),
+            temporary_file_path.path().to_owned(),
+        );
 
         Self {
             temporary_file: memored_mapped_temporary_file,
             storage_path: storage_path.as_ref().to_path_buf(),
-
         }
     }
 
@@ -77,7 +79,6 @@ impl Deref for MemoryMappedStorage {
 }
 
 impl DerefMut for MemoryMappedStorage {
-
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.temporary_file.mmap
     }
@@ -104,21 +105,27 @@ pub struct Validator {
 }
 
 impl Validator {
-    fn find_neuron_info(neurons: &[NeuronInfoLite], account_id: AccountId) -> Option<&NeuronInfoLite> {
-        neurons
-            .iter()
-            .find(|neuron| neuron.hotkey == account_id)
+    fn find_neuron_info<'a>(
+        neurons: &'a [NeuronInfoLite],
+        account_id: &AccountId,
+    ) -> Option<&'a NeuronInfoLite> {
+        neurons.iter().find(|neuron| &neuron.hotkey == account_id)
     }
 
-    fn not_registered(account_id: AccountId) -> ! {
-        panic!("Hotkey {account_id} is not registered in {}", *config::NETUID);
+    fn not_registered(account_id: &AccountId) -> ! {
+        panic!(
+            "Hotkey {account_id} is not registered in {}",
+            *config::NETUID
+        );
     }
 
     pub async fn new() -> Self {
-        let keypair = load_hotkey_keypair(
-            &config::WALLET_NAME,
-            &config::HOTKEY_NAME,
-        ).unwrap();
+        let mut seed_buf = [0u8; 32];
+
+        let hotkey_location = hotkey_location(&config::WALLET_NAME, &config::HOTKEY_NAME).expect("No home directory found");
+        let seed = load_key_seed(&hotkey_location).unwrap();
+
+        let keypair = Keypair::from_seed(&seed).unwrap();
 
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
@@ -164,8 +171,8 @@ impl Validator {
         let home = dirs::home_dir().expect("Could not find home directory");
         home.join(".bittensor")
             .join("miners")
-            .join(&config::WALLET_NAME)
-            .join(&config::HOTKEY_NAME)
+            .join(&*config::WALLET_NAME)
+            .join(&*config::HOTKEY_NAME)
             .join(format!("netuid{}", *config::NETUID))
             .join("validator")
             .join("state.json")
@@ -231,7 +238,19 @@ impl Validator {
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            self.subtensor.set_weights(*config::NETUID, self.state.scores.iter().enumerate().map(|(uid, &score)| (uid as u16, score)).collect(), VERSION_KEY).await?;
+            self.subtensor
+                .set_weights(
+                    &self.keypair,
+                    *config::NETUID,
+                    self.state
+                        .scores
+                        .iter()
+                        .enumerate()
+                        .map(|(uid, &score)| (uid as u16, score))
+                        .collect(),
+                    VERSION_KEY,
+                )
+                .await?;
         }
 
         Ok(())
@@ -270,7 +289,10 @@ impl Validator {
     pub(crate) async fn run(&mut self) {
         loop {
             if let Err(e) = self.do_step().await {
-                error!("Error during evolution step {step}, {e}", step=self.state.step);
+                error!(
+                    "Error during evolution step {step}, {e}",
+                    step = self.state.step
+                );
             }
         }
     }
@@ -293,7 +315,7 @@ impl Validator {
                 let msb = b >> 63;
                 b &= (1 << 63) - 1;
                 a = (a << 1) | msb;
-                (a as u8, b as u8)  // Convert back to u8
+                (a as u8, b as u8) // Convert back to u8
             };
             (new_a, new_b)
         }
@@ -306,8 +328,8 @@ impl Validator {
             let mut next_list = lists[i + 1].to_array();
 
             let (new_last, new_first) = normalize_pair(
-                current_list[31],  // last element of current list
-                next_list[0],       // first element of next list
+                current_list[31], // last element of current list
+                next_list[0],     // first element of next list
             );
 
             current_list[31] = new_last;

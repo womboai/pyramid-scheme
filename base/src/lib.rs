@@ -1,7 +1,15 @@
+use std::fs::File;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
+use hex;
 use parity_scale_codec::{Compact, Decode};
+use serde_json::Value;
 use subxt::{Config, SubstrateConfig};
 use subxt::client::OnlineClient;
+use subxt::ext::sp_core::{Pair, sr25519};
+use subxt::tx::PairSigner;
 
 pub mod config;
 
@@ -57,6 +65,58 @@ pub struct Subtensor {
     client: OnlineClient<SubtensorConfig>,
 }
 
+pub struct Keypair(PairSigner<SubtensorConfig, sr25519::Pair>);
+
+impl Deref for Keypair {
+    type Target = PairSigner<SubtensorConfig, sr25519::Pair>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub fn hotkey_location_with_home(
+    mut home_directory: PathBuf,
+    wallet_name: impl AsRef<Path>,
+    hotkey_name: impl AsRef<Path>,
+) -> PathBuf {
+    home_directory.push(".bittensor");
+    home_directory.push("wallets");
+    home_directory.push(wallet_name);
+    home_directory.push("hotkeys");
+    home_directory.push(hotkey_name);
+
+    home_directory
+}
+
+pub fn hotkey_location(
+    wallet_name: impl AsRef<Path>,
+    hotkey_name: impl AsRef<Path>,
+) -> Option<PathBuf> {
+    Some(hotkey_location_with_home(
+        dirs::home_dir()?,
+        wallet_name,
+        hotkey_name,
+    ))
+}
+
+pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
+    let json: Value = serde_json::from_reader(File::open(path)?)?;
+
+    let seed = json.as_object()?.get("secretSeed")?.as_str().unwrap();
+
+    let mut decoded = [0; 32];
+    hex::decode_to_slice(&seed[2..], &mut decoded)?;
+
+    Ok(decoded)
+}
+
+impl Keypair {
+    pub fn from_seed(seed: &[u8]) -> Result<Self> {
+        Ok(Self(PairSigner::new(sr25519::Pair::from_seed_slice(seed)?)))
+    }
+}
+
 impl Subtensor {
     pub async fn new(url: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
@@ -82,6 +142,7 @@ impl Subtensor {
 
     pub async fn set_weights(
         &self,
+        keypair: &Keypair,
         netuid: u16,
         weights: Vec<(u16, u16)>,
         version_key: u64,
@@ -93,7 +154,10 @@ impl Subtensor {
             version_key,
         );
 
-        let response = self.client.tx();
+        self.client
+            .tx()
+            .sign_and_submit_default(&set_weights_payload, &keypair.0)
+            .await?;
 
         Ok(())
     }
