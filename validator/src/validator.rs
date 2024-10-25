@@ -15,6 +15,8 @@ use tokio::time::{Duration, sleep};
 use tracing::{error, info};
 use crate::models::ComputationData;
 
+const VERSION_KEY: u64 = 1;
+
 struct MemoryMappedFile {
     mmap: MmapMut,
     file: File,
@@ -229,7 +231,7 @@ impl Validator {
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update >= config::EPOCH_LENGTH {
-            self.set_weights()?;
+            self.subtensor.set_weights(*config::NETUID, self.state.scores.iter().enumerate().collect(), VERSION_KEY)?;
         }
 
         Ok(())
