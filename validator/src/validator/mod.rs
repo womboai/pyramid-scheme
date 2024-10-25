@@ -1,86 +1,49 @@
+use std::cell::UnsafeCell;
+use std::cmp::min;
 use std::fs;
-use std::fs::File;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::simd::Simd;
+use std::sync::Arc;
 
 use anyhow::Result;
 use dirs;
-use memmap2::{MmapMut, MmapOptions};
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
+use threadpool::ThreadPool;
 use tracing::{error, info};
 
-use neuron::{config, AccountId, NeuronInfoLite, Subtensor, hotkey_location, load_key_seed, Keypair};
+use neuron::{AccountId, config, hotkey_location, Keypair, load_key_seed, NeuronInfoLite, Subtensor};
+
+use crate::validator::memory_storage::{MemoryMappedFile, MemoryMappedStorage};
+
+mod memory_storage;
 
 const VERSION_KEY: u64 = 1;
 
-struct MemoryMappedFile {
-    mmap: MmapMut,
-    path: PathBuf,
-    _file: File,
-}
+#[derive(Clone)]
+struct CurrentRow(Arc<UnsafeCell<MemoryMappedStorage>>);
 
-impl MemoryMappedFile {
-    fn new(file: File, path: impl AsRef<Path>) -> Self {
-        // SAFETY: This would typically not be safe as this is technically a self-referential
-        //  struct. Mmap is using a reference of `&file` without a lifetime. However this works as
-        //  mmap uses the file descriptor internally, so even if {File} is moved, the descriptor
-        //  remains the same, and the file descriptor is closed at the same time the mmap is closed.
-        let mmap = unsafe { MmapOptions::new().map_mut(&file) }.unwrap();
-
-        Self {
-            mmap,
-            path: path.as_ref().to_path_buf(),
-            _file: file,
-        }
+impl CurrentRow {
+    fn new(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self(Arc::new(UnsafeCell::new(MemoryMappedStorage::new(path)?))))
     }
 }
 
-struct MemoryMappedStorage {
-    temporary_file: MemoryMappedFile,
-    storage_path: PathBuf,
-}
+unsafe impl Send for CurrentRow {}
 
-impl MemoryMappedStorage {
-    fn new(storage_path: impl AsRef<Path>) -> Self {
-        let temporary_file_path = NamedTempFile::new().unwrap();
-
-        if fs::exists(&storage_path).unwrap() {
-            fs::rename(&storage_path, &temporary_file_path).unwrap();
-        }
-
-        let memored_mapped_temporary_file = MemoryMappedFile::new(
-            temporary_file_path.reopen().unwrap(),
-            temporary_file_path.path().to_owned(),
-        );
-
-        Self {
-            temporary_file: memored_mapped_temporary_file,
-            storage_path: storage_path.as_ref().to_path_buf(),
-        }
-    }
-
-    fn flush(&self) -> Result<()> {
-        self.temporary_file.mmap.flush()?;
-        fs::rename(&self.temporary_file.path, &self.storage_path)?;
-
-        Ok(())
-    }
-}
-
-impl Deref for MemoryMappedStorage {
-    type Target = [u8];
+impl Deref for CurrentRow {
+    type Target = MemoryMappedStorage;
 
     fn deref(&self) -> &Self::Target {
-        &self.temporary_file.mmap
+        unsafe { &*self.0.get() }
     }
 }
 
-impl DerefMut for MemoryMappedStorage {
+impl DerefMut for CurrentRow {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.temporary_file.mmap
+        unsafe { &mut *self.0.get() }
     }
 }
 
@@ -97,11 +60,13 @@ pub struct Validator {
     neurons: Vec<NeuronInfoLite>,
     uid: u16,
 
-    current_row: MemoryMappedStorage,
-    center_column: MemoryMappedStorage,
+    current_row: CurrentRow,
+    center_column: MemoryMappedFile,
     state: ValidatorState,
 
     last_metagraph_sync: u64,
+
+    thread_pool: ThreadPool,
 }
 
 impl Validator {
@@ -129,6 +94,7 @@ impl Validator {
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
+        let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
         let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
 
         let uid = if let Some(neuron_info) = neuron_info {
@@ -146,8 +112,8 @@ impl Validator {
             hotkeys,
         };
 
-        let current_row = MemoryMappedStorage::new("current_row.bin");
-        let center_column = MemoryMappedStorage::new("center_column.bin");
+        let current_row = CurrentRow::new("current_row.bin").unwrap();
+        let center_column = MemoryMappedFile::open("center_column.bin").unwrap();
 
         let mut validator = Self {
             keypair,
@@ -157,10 +123,17 @@ impl Validator {
             current_row,
             center_column,
             state,
-            last_metagraph_sync: 0,
+            last_metagraph_sync,
+            thread_pool: ThreadPool::new(256),
         };
 
         validator.load_state().unwrap();
+
+        if validator.state.step == 1 {
+            // Initial state
+            validator.current_row[0] = 1;
+            validator.center_column[0] = 1;
+        }
 
         validator
     }
@@ -257,6 +230,21 @@ impl Validator {
         Ok(())
     }
 
+    fn handle_connection(mut current_row: CurrentRow, mut connection: TcpStream, start: usize, end: usize) {
+        let buffer_size = min(end - start, 8 * 4 * 512);
+
+        let iterations = (end - start) / buffer_size;
+
+        for i in 0..iterations {
+            let from = start + i * buffer_size;
+            let to = start + (i + 1) * buffer_size;
+
+            // TODO error handle
+            connection.write(&current_row[from..to]).unwrap();
+            connection.read(&mut current_row[from..to]).unwrap();
+        }
+    }
+
     async fn do_step(&mut self) -> Result<()> {
         info!("Evolution step {}", self.state.step);
 
@@ -266,6 +254,8 @@ impl Validator {
         if elapsed_blocks >= *config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
+
+        let mut connections = Vec::with_capacity(256);
 
         for neuron in &self.neurons {
             let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
@@ -277,9 +267,27 @@ impl Validator {
             let address = SocketAddr::new(ip, neuron.axon_info.port);
 
             if let Ok(stream) = TcpStream::connect(address) {
-                // TODO
+                connections.push(stream);
             }
         }
+
+        let connection_count = connections.len();
+        let byte_count = (self.state.step / 4 + 1) as usize;
+
+        let chunk_size = if connection_count % 2 == 0 {
+            byte_count / connection_count + 1
+        } else {
+            byte_count / connection_count
+        };
+
+        // TODO Handle connection prematurely dying or giving invalid results
+        for (index, connection) in connections.into_iter().enumerate() {
+            let row = self.current_row.clone();
+
+            self.thread_pool.execute(move || Self::handle_connection(row, connection, index * chunk_size, (index + 1) * chunk_size));
+        }
+
+        self.thread_pool.join();
 
         self.state.step += 1;
         self.save_state()?;
