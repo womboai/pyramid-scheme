@@ -3,7 +3,7 @@
 use std::process;
 
 use tokio;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::{fmt};
 
 mod validator;

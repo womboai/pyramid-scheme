@@ -6,8 +6,8 @@ use std::path::Path;
 use parity_scale_codec::Decode;
 use subxt_codegen;
 use subxt_codegen::CodegenBuilder;
-use subxt_codegen::fetch_metadata::{fetch_metadata_from_url, MetadataVersion};
 use subxt_metadata::Metadata;
+use subxt_utils_fetchmetadata::{self as fetch_metadata, MetadataVersion};
 
 #[tokio::main]
 async fn main() {
@@ -20,7 +20,7 @@ async fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let metadata_path = Path::new(&out_dir).join("metadata.rs");
 
-    let metadata_bytes = fetch_metadata_from_url(endpoint.try_into().unwrap(), MetadataVersion::Latest).await.unwrap();
+    let metadata_bytes = fetch_metadata::from_url(endpoint.try_into().unwrap(), MetadataVersion::Latest).await.unwrap();
     let mut metadata_bytes: &[u8] = &metadata_bytes;
     let metadata = Metadata::decode(&mut metadata_bytes).unwrap();
 

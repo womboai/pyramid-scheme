@@ -6,9 +6,11 @@ use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
 use std::slice;
 use std::time::{Duration, Instant};
 
-use log::{error, info};
-use neuron::{config, Subtensor};
+use anyhow::Result;
 use threadpool::ThreadPool;
+use tracing::{error, info};
+
+use neuron::{config, NeuronInfoLite, Subtensor};
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
@@ -136,38 +138,67 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    let subtensor = Subtensor::new(&config::CHAIN_ENDPOINT).await.unwrap();
+struct Miner {
+    subtensor: Subtensor,
+    current_block: u64,
+    last_block_fetch: Instant,
+    neurons: Vec<NeuronInfoLite>,
+    last_metagraph_sync: u64,
+}
 
-    let mut current_block = subtensor.get_block_number().await.unwrap();
-    let mut last_block_fetch = Instant::now();
+impl Miner {
+    async fn new() -> Self {
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-    let mut last_metagraph_sync = current_block;
+        let current_block = subtensor.get_block_number().await.unwrap();
+        let last_block_fetch = Instant::now();
+        let neurons = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
-    let mut neurons = subtensor.get_neurons(config::NETUID).await.unwrap();
-
-    let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
-    let listener = TcpListener::bind((ip, 8091)).unwrap();
-    let pool = ThreadPool::new(32);
-
-    listener.set_nonblocking(true).unwrap();
-
-    loop {
-        let now = Instant::now();
-
-        if now - last_block_fetch >= Duration::from_secs(12) {
-            current_block = subtensor.get_block_number().await?;
-            last_block_fetch = now;
-
-            if current_block - last_metagraph_sync >= config::EPOCH_LENGTH {
-                neurons = subtensor.get_neurons(config::NETUID).await?;
-                last_metagraph_sync = current_block;
-            }
-        }
-
-        if let Ok((stream, address)) = listener.accept() {
-            pool.execute(move || handle_connection(stream, address));
+        Self {
+            subtensor,
+            current_block,
+            last_block_fetch,
+            neurons,
+            last_metagraph_sync: current_block,
         }
     }
+
+    async fn sync(&mut self, now: Instant) -> Result<()> {
+        self.current_block = self.subtensor.get_block_number().await?;
+        self.last_block_fetch = now;
+
+        if self.current_block - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
+            self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+            self.last_metagraph_sync = self.current_block;
+        }
+
+        Ok(())
+    }
+
+    async fn run(&mut self) {
+        let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
+        let listener = TcpListener::bind((ip, 8091)).unwrap();
+        let pool = ThreadPool::new(32);
+
+        listener.set_nonblocking(true).unwrap();
+
+        loop {
+            let now = Instant::now();
+
+            if now - self.last_block_fetch >= Duration::from_secs(12) {
+                if let Err(e) = self.sync(now).await {
+                    error!("Failed to sync metagraph: {e}");
+                }
+            }
+
+            if let Ok((stream, address)) = listener.accept() {
+                pool.execute(move || handle_connection(stream, address));
+            }
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    Miner::new().await.run().await;
 }

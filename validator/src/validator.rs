@@ -1,12 +1,12 @@
 use std::fs;
 use std::fs::File;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::simd::Simd;
 
 use anyhow::Result;
 use memmap2::{MmapMut, MmapOptions};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use tokio::time::{Duration, sleep};
@@ -81,13 +81,6 @@ impl DerefMut for MemoryMappedStorage {
 
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.temporary_file.mmap
-    }
-}
-
-impl Drop for MemoryMappedStorage {
-    fn drop(&mut self) {
-        // TODO Handle drop errors
-        self.flush().unwrap();
     }
 }
 
@@ -184,6 +177,9 @@ impl Validator {
     fn save_state(&self) -> Result<()> {
         let path = self.state_path();
 
+        self.center_column.flush()?;
+        self.current_row.flush()?;
+
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -254,72 +250,18 @@ impl Validator {
             self.sync(Some(current_block)).await?;
         }
 
-        // Wait for miners if needed
-        while self.valid_miners.is_empty() {
-            info!("Not enough miners to compute step, waiting until next sync");
-            sleep(Duration::from_secs((*config::EPOCH_LENGTH - elapsed_blocks) as u64)).await;
-            self.sync(None).await?;
-        }
+        for neuron in &self.neurons {
+            let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
+                Ipv4Addr::from(neuron.axon_info.ip).into()
+            } else {
+                Ipv6Addr::from(neuron.axon_info.ip).into()
+            };
 
-        // Distribute work among miners
-        let chunk_size = (self.current_row.len() as f64 / self.valid_miners.len() as f64).ceil() as usize;
-        let mut chunks = Vec::new();
-        let mut current_pos = 0;
+            let address = SocketAddr::new(ip, neuron.axon_info.port);
 
-        for &uid in &self.valid_miners {
-            let end = (current_pos + chunk_size).min(self.current_row.len());
-            let chunk = self.current_row.slice(s![current_pos..end]).to_vec();
-            chunks.push((uid, chunk));
-            current_pos = end;
-            if current_pos >= self.current_row.len() {
-                break;
+            if let Ok(stream) = TcpStream::connect(address) {
+                thread_pool
             }
-        }
-
-        // Make concurrent requests
-        let futures: Vec<_> = chunks.into_iter().map(|(uid, chunk)| {
-            let data = ComputationData { parts: chunk };
-            async move {
-                let node = &self.neurons[uid];
-                let result = self.make_request(node, Some(&data)).await;
-                (uid, result)
-            }
-        }).collect();
-
-        let results = futures::future::join_all(futures).await;
-
-        // Process results
-        let mut responses = Vec::new();
-        for (uid, result) in results {
-            match result {
-                Ok((response, inference_time)) => {
-                    if let Ok(data) = response.json::<ComputationData>().await {
-                        self.state.scores[uid as usize] = (u16::MAX / inference_time) as u16;
-                        responses.push(data.parts);
-                    } else {
-                        self.state.scores[uid as usize] = 0;
-                    }
-                }
-                Err(_) => {
-                    self.state.scores[uid as usize] = 0;
-                }
-            }
-        }
-
-        // Update state
-        if !responses.is_empty() {
-            let mut simd_data: Vec<_> = responses.into_iter()
-                .map(|v| Simd::from_array(v.try_into().unwrap()))
-                .collect();
-
-            let normalized = Self::normalize_response_data(&mut simd_data);
-            self.current_row = Array1::from_vec(normalized.into_iter().map(|x| x as u64).collect());
-
-            let bit_index = self.state.step % 64;
-            let row_part = self.current_row[self.state.step as usize / 64];
-
-            self.center_column[self.center_column.len() - 1] |=
-                (row_part >> bit_index) << bit_index;
         }
 
         self.state.step += 1;

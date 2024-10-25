@@ -9,14 +9,15 @@ path = "src/lib.rs"
 name = "neuron"
 
 [dependencies]
-log = { workspace = true }
+tracing = { workspace = true }
 anyhow = { workspace = true }
 
 parity-scale-codec = "3.0.0"
-subxt = { version = "0.37.0", features = ["jsonrpsee"] }
+subxt = { version = "0.38.0", features = ["jsonrpsee"] }
 
 [build-dependencies]
-subxt-codegen = "0.37.0"
-subxt-metadata = "0.37.0"
+subxt-codegen = "0.38.0"
+subxt-metadata = "0.38.0"
+subxt-utils-fetchmetadata = {version = "0.38.0", features = ["url"]}
 parity-scale-codec = "3.0.0"
 tokio = { workspace = true }

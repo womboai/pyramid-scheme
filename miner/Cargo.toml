@@ -8,7 +8,12 @@ name = "miner"
 path = "src/main.rs"
 
 [dependencies]
-log = { workspace = true }
 tokio = { workspace = true }
+anyhow = { workspace = true }
+
+tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
+
+threadpool = { workspace = true }
 
 rule-30-solver-neuron = { path = "../base" }
