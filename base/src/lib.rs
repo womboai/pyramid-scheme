@@ -1,7 +1,7 @@
 use anyhow::Result;
 use parity_scale_codec::{Compact, Decode};
-use subxt::client::{OfflineClientT, OnlineClient, OnlineClientT};
 use subxt::{Config, SubstrateConfig};
+use subxt::client::OnlineClient;
 
 pub mod config;
 

@@ -1,15 +1,18 @@
-use std::convert::TryInto;
 use std::env;
+use std::sync::LazyLock;
 
-pub static EPOCH_LENGTH: u64 = env::var("EPOCH_LENGTH")
-    .map(|epoch| <String as TryInto<u64>>::try_into(epoch).unwrap())
-    .unwrap_or(100);
+pub static EPOCH_LENGTH: LazyLock<u64> = LazyLock::new(|| env::var("EPOCH_LENGTH")
+    .map(|var| var.parse().unwrap())
+    .unwrap_or(100)
+);
 
-pub static CHAIN_ENDPOINT: String = env::var("CHAIN_ENDPOINT").unwrap();
+pub static CHAIN_ENDPOINT: LazyLock<String> = LazyLock::new(|| env::var("CHAIN_ENDPOINT").unwrap());
 
-pub static NETUID: u16 = env::var("NETUID")
-    .map(|epoch| <String as TryInto<u16>>::try_into(epoch).unwrap())
-    .unwrap();
+pub static NETUID: LazyLock<u16> = LazyLock::new(|| env::var("NETUID")
+    .as_ref()
+    .map(|var| var.parse().unwrap())
+    .unwrap()
+);
 
-pub static WALLET_NAME: String = env::var("WALLET_NAME").unwrap();
-pub static HOTKEY_NAME: String = env::var("HOTKEY_NAME").unwrap();
+pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap());
+pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap());

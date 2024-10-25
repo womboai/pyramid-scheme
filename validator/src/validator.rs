@@ -109,11 +109,10 @@ pub struct Validator {
 }
 
 impl Validator {
-    fn find_uid(neurons: &[NeuronInfoLite], account_id: AccountId) -> Option<u16> {
+    fn find_neuron_info(neurons: &[NeuronInfoLite], account_id: AccountId) -> Option<&NeuronInfoLite> {
         neurons
             .iter()
             .find(|neuron| neuron.hotkey == account_id)
-            .map(|neuron| neuron.uid.0)
     }
 
     fn not_registered(account_id: AccountId) -> ! {
@@ -130,10 +129,10 @@ impl Validator {
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(config::NETUID).unwrap();
 
-        let uid = Self::find_uid(&neurons, keypair.account_id());
+        let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
 
-        let uid = if let Some(uid) = uid {
-            uid;
+        let uid = if let Some(neuron_info) = neuron_info {
+            neuron_info.uid
         } else {
             Self::not_registered(keypair.account_id());
         };
@@ -211,13 +210,15 @@ impl Validator {
         let block = block.unwrap_or_else(|| self.subtensor.get_block_number());
         self.last_metagraph_sync = block;
 
-        let uid = Self::find_uid(&self.neurons, self.keypair.account_id());
+        let neuron_info = Self::find_neuron_info(&self.neurons, self.keypair.account_id());
 
-        if let Some(uid) = uid {
-            self.uid = uid;
+        let neuron_info = if let Some(neuron_info) = neuron_info {
+            neuron_info
         } else {
             Self::not_registered(self.keypair.account_id());
-        }
+        };
+
+        self.uid = neuron_info.uid;
 
         // Update scores array size if needed
         if self.state.hotkeys.len() != self.neurons.len() {
@@ -227,8 +228,7 @@ impl Validator {
         }
 
         // Set weights if enough time has passed
-        let node = &self.neurons[&self.keypair.ss58_address()];
-        if block - node.last_updated >= config::EPOCH_LENGTH {
+        if block - neuron_info.last_update >= config::EPOCH_LENGTH {
             self.set_weights()?;
         }
 
@@ -241,14 +241,14 @@ impl Validator {
         let current_block = self.subtensor.get_block_number().await?;
         let elapsed_blocks = current_block - self.last_metagraph_sync;
 
-        if elapsed_blocks >= config::EPOCH_LENGTH {
+        if elapsed_blocks >= *config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
 
         // Wait for miners if needed
         while self.valid_miners.is_empty() {
-            log::info!("Not enough miners to compute step, waiting until next sync");
-            sleep(Duration::from_secs((EPOCH_LENGTH - elapsed_blocks) as u64)).await;
+            info!("Not enough miners to compute step, waiting until next sync");
+            sleep(Duration::from_secs((*config::EPOCH_LENGTH - elapsed_blocks) as u64)).await;
             self.sync(None).await?;
         }
 
@@ -271,8 +271,8 @@ impl Validator {
         let futures: Vec<_> = chunks.into_iter().map(|(uid, chunk)| {
             let data = ComputationData { parts: chunk };
             async move {
-                let node = &self.neurons[&self.hotkeys[uid as usize]];
-                let result = self.make_request(node, "compute", Some(&data)).await;
+                let node = &self.neurons[uid];
+                let result = self.make_request(node, Some(&data)).await;
                 (uid, result)
             }
         }).collect();
