@@ -1,4 +1,3 @@
-use dirs;
 use std::fs;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -7,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::simd::Simd;
 
 use anyhow::Result;
+use dirs;
 use memmap2::{MmapMut, MmapOptions};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -15,7 +15,6 @@ use tracing::{error, info};
 
 use neuron::{AccountId, config, NeuronInfoLite, Subtensor};
 use substrate_interface::Keypair;
-use dirs;
 
 const VERSION_KEY: u64 = 1;
 
