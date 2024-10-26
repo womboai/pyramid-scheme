@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::fs;
+use std::{fs, mem};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
@@ -298,7 +298,6 @@ impl Validator {
             // TODO error handle
             connection.write(&current_row[from..to]).unwrap();
             connection.read(&mut current_row[from..to]).unwrap();
-            println!("{:?}", &current_row[from..to])
         }
     }
 
