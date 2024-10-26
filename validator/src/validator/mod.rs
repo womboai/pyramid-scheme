@@ -136,11 +136,11 @@ impl Validator {
     }
 
     fn current_row_file_size(step: u64) -> u64 {
-        (Self::step_to_grow_to(step) * 2 + 1) / 7 + 1
+        (Self::step_to_grow_to(step) * 2 + 1).div_ceil(8)
     }
 
     fn center_column_file_size(step: u64) -> u64 {
-        Self::step_to_grow_to(step) / 7 + 1
+        Self::step_to_grow_to(step).div_ceil(8)
     }
 
     pub async fn new() -> Self {
@@ -165,7 +165,7 @@ impl Validator {
 
         let state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
 
-        fs::create_dir("state").unwrap();
+        fs::create_dir_all("state").unwrap();
 
         let mut current_row =
             CurrentRow::open("state/current_row.bin", Self::current_row_file_size(state.step)).unwrap();
@@ -287,9 +287,9 @@ impl Validator {
         start: u64,
         end: u64,
     ) {
-        let buffer_size = min(end - start, 8 * 4 * 512);
+        let buffer_size = min(end - start, 8 * 4 * 256);
 
-        let iterations = (end - start) / buffer_size;
+        let iterations = (end - start).div_ceil(buffer_size);
 
         for i in 0..iterations {
             let from = (start + i * buffer_size) as usize;
@@ -298,6 +298,7 @@ impl Validator {
             // TODO error handle
             connection.write(&current_row[from..to]).unwrap();
             connection.read(&mut current_row[from..to]).unwrap();
+            println!("{:?}", &current_row[from..to])
         }
     }
 
@@ -346,13 +347,9 @@ impl Validator {
 
         let connection_count = connections.len() as u64;
 
-        let byte_count = (self.state.step * 2 + 1) / 7 + 1;
+        let byte_count = (self.state.step * 2 + 1).div_ceil(8);
 
-        let chunk_size = if connection_count % 2 == 0 {
-            byte_count / (connection_count + 1)
-        } else {
-            byte_count / connection_count
-        };
+        let chunk_size = byte_count.div_ceil(connection_count);
 
         // TODO Handle connection prematurely dying or giving invalid results
         for (index, connection) in connections.into_iter().enumerate() {
@@ -373,7 +370,7 @@ impl Validator {
 
         self.thread_pool.join();
 
-        for i in 1..connection_count {
+        for i in 1..connection_count - 1 {
             let end = ((i + 1) * chunk_size) as usize;
 
             let [a, b] = self.current_row[end..end+1] else {
@@ -384,9 +381,6 @@ impl Validator {
 
             self.current_row[end..end+1].copy_from_slice(&[a, b]);
         }
-
-        let last_bits = (self.state.step % 2) as u8 * 2 + 1;
-        self.current_row[(connection_count * chunk_size) as usize] = last_bits;
 
         let bit_index = self.state.step % 8;
         let part = self.state.step / 8;
@@ -422,7 +416,6 @@ impl Validator {
         a = rule_30(a);
         b = rule_30(b);
         let msb = b >> 7;
-        b &= (1 << 7) - 1;
         a = (a << 1) | msb;
 
         (a, b)

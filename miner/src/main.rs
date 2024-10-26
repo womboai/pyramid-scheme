@@ -123,7 +123,12 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
             break;
         }
 
+        println!("{:?}", &as_u8(&buffer)[..len]);
+
         solver.solve(&mut buffer, len);
+
+        println!("{:?}", &as_u8(&buffer)[..len]);
+
         match stream.write(&as_u8(&buffer)[..len]) {
             Ok(len) => {
                 if len == 0 {
