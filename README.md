@@ -61,7 +61,7 @@ To run either a miner or validator, export the following environment variables a
 ```bash
 export CHAIN_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443 
 export NETUID=36
-export EPOCH_LENGTH=100
+export EPOCH_LENGTH=100 # Interval length to sync metagraph or set weights
 ```
 
 #### Running a miner
