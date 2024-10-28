@@ -1,5 +1,3 @@
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
 use std::fs;
@@ -9,16 +7,17 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use neuron::{
-    hotkey_location, load_key_seed, subnet_config, AccountId, Keypair, NeuronInfoLite, Subtensor,
-};
+use neuron::{AccountId, config, hotkey_location, load_key_seed, NeuronInfoLite, Signer, signer_from_seed, Subtensor};
+use neuron::auth::{KeyRegistrationInfo, sign_message, VerificationMessage};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
-use neuron::wallet_config;
 
 mod memory_storage;
 
@@ -67,7 +66,7 @@ impl DerefMut for CurrentRow {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct KeyInfo {
+struct KeyScoreInfo {
     hotkey: AccountId,
     score: u16,
 }
@@ -75,12 +74,12 @@ struct KeyInfo {
 #[derive(Debug, Serialize, Deserialize)]
 struct ValidatorState {
     step: u64,
-    key_info: Vec<KeyInfo>,
+    key_info: Vec<KeyScoreInfo>,
 }
 
 impl ValidatorState {
     fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
-        let key_info = hotkeys.map(|hotkey| KeyInfo { hotkey, score: 0 }).collect();
+        let key_info = hotkeys.map(|hotkey| KeyScoreInfo { hotkey, score: 0 }).collect();
 
         Self { step: 1, key_info }
     }
@@ -96,7 +95,7 @@ impl Default for ValidatorState {
 }
 
 pub struct Validator {
-    keypair: Keypair,
+    signer: Signer,
     subtensor: Subtensor,
     neurons: Vec<NeuronInfoLite>,
     uid: u16,
@@ -121,7 +120,7 @@ impl Validator {
     fn not_registered(account_id: &AccountId) -> ! {
         panic!(
             "Hotkey {account_id} is not registered in sn{}",
-            *subnet_config::NETUID
+            *config::NETUID
         );
     }
 
@@ -146,19 +145,18 @@ impl Validator {
 
     pub async fn new() -> Self {
         let hotkey_location =
-            hotkey_location(&*wallet_config::WALLET_NAME, &*wallet_config::HOTKEY_NAME)
-                .expect("No home directory found");
+            hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
 
         let seed = load_key_seed(&hotkey_location).unwrap();
 
-        let keypair = Keypair::from_seed(&seed).unwrap();
+        let keypair = signer_from_seed(&seed).unwrap();
 
-        let subtensor = Subtensor::new(&*subnet_config::CHAIN_ENDPOINT)
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
             .await
             .unwrap();
 
         let neurons: Vec<NeuronInfoLite> =
-            subtensor.get_neurons(*subnet_config::NETUID).await.unwrap();
+            subtensor.get_neurons(*config::NETUID).await.unwrap();
 
         let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
         let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
@@ -192,7 +190,7 @@ impl Validator {
         }
 
         Self {
-            keypair,
+            signer: keypair,
             subtensor,
             neurons,
             uid,
@@ -238,7 +236,7 @@ impl Validator {
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
-        self.neurons = self.subtensor.get_neurons(*subnet_config::NETUID).await?;
+        self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
         let block = if let Some(block) = block {
             block
@@ -248,12 +246,12 @@ impl Validator {
 
         self.last_metagraph_sync = block;
 
-        let neuron_info = Self::find_neuron_info(&self.neurons, self.keypair.account_id());
+        let neuron_info = Self::find_neuron_info(&self.neurons, self.signer.account_id());
 
         let neuron_info = if let Some(neuron_info) = neuron_info {
             neuron_info
         } else {
-            Self::not_registered(self.keypair.account_id());
+            Self::not_registered(self.signer.account_id());
         };
 
         self.uid = neuron_info.uid.0;
@@ -264,18 +262,18 @@ impl Validator {
 
             self.state
                 .key_info
-                .resize_with(self.neurons.len(), || KeyInfo {
+                .resize_with(self.neurons.len(), || KeyScoreInfo {
                     hotkey: self.neurons[uid_iterator.next().unwrap()].hotkey.clone(),
                     score: 0,
                 });
         }
 
         // Set weights if enough time has passed
-        if block - neuron_info.last_update.0 >= *subnet_config::EPOCH_LENGTH {
+        if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
             self.subtensor
                 .set_weights(
-                    &self.keypair,
-                    *subnet_config::NETUID,
+                    &self.signer,
+                    *config::NETUID,
                     self.state
                         .key_info
                         .iter()
@@ -310,7 +308,7 @@ impl Validator {
         }
     }
 
-    fn connect_to_miners(&self) -> Vec<TcpStream> {
+    fn connect_to_miners(&self) -> Vec<(u16, AccountId, TcpStream)> {
         let mut connections = Vec::with_capacity(256);
 
         for neuron in &self.neurons {
@@ -325,7 +323,7 @@ impl Validator {
             info!("Attempting to connect to {address}");
 
             if let Ok(stream) = TcpStream::connect(address) {
-                connections.push(stream);
+                connections.push((neuron.uid.0, neuron.hotkey.clone(), stream));
             }
         }
 
@@ -338,7 +336,7 @@ impl Validator {
         let current_block = self.subtensor.get_block_number().await?;
         let elapsed_blocks = current_block - self.last_metagraph_sync;
 
-        if elapsed_blocks >= *subnet_config::EPOCH_LENGTH {
+        if elapsed_blocks >= *config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
 
@@ -362,7 +360,36 @@ impl Validator {
         let chunk_size = byte_count.div_ceil(connection_count);
 
         // TODO Handle connection prematurely dying or giving invalid results
-        for (index, connection) in connections.into_iter().enumerate() {
+        for (index, (uid, account_id, mut connection)) in connections.into_iter().enumerate() {
+            let message = VerificationMessage {
+                nonce: 0,
+                netuid: *config::NETUID,
+
+                miner: KeyRegistrationInfo {
+                    uid,
+                    account_id,
+                },
+
+                validator: KeyRegistrationInfo {
+                    uid: self.uid,
+                    account_id: self.signer.account_id().clone(),
+                },
+            };
+
+            let signature = sign_message(&self.signer, &message);
+
+            if let Err(e) = connection.write((&message).as_ref()) {
+                error!("Failed to write to miner {uid}, {e}");
+
+                continue
+            };
+
+            if let Err(e) = connection.write(&signature) {
+                error!("Failed to write to miner {uid}, {e}");
+
+                continue
+            };
+
             unsafe {
                 // SAFETY: This is safe as the data read/written does not overlap between threads
                 let row = self.current_row.share();

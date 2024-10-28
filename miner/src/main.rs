@@ -1,16 +1,19 @@
 #![feature(portable_simd)]
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
-use std::time::{Duration, Instant};
+use std::mem::MaybeUninit;
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::simd::{LaneCount, Simd, SupportedLaneCount, u64x4};
 use std::slice;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
-use neuron::{subnet_config, NeuronInfoLite, Subtensor};
+use neuron::{AccountId, NeuronInfoLite, config, Subtensor};
+use neuron::auth::{KeypairSignature, VerificationMessage, signature_matches};
+
 mod miner_config;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
@@ -101,9 +104,37 @@ impl Solver {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
-    info!("Validator {address} has connected");
+fn read<T>(stream: &mut TcpStream) -> T {
+    let mut data = MaybeUninit::<T>::uninit();
 
+    unsafe {
+        stream.read(slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, size_of::<AccountId>())).unwrap();
+
+        data.assume_init()
+    }
+}
+
+fn info_matches(message: &VerificationMessage, neurons: &[NeuronInfoLite], account_id: &AccountId, miner_uid: u16) -> bool {
+    if message.netuid != *config::NETUID {
+        return false;
+    }
+
+    if &message.miner.account_id != account_id {
+        return false;
+    }
+
+    if message.miner.uid != miner_uid {
+        return false;
+    }
+
+    if neurons[message.validator.uid as usize].hotkey != message.validator.account_id {
+        return false;
+    }
+
+    return true
+}
+
+fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
     let mut buffer = Vec::with_capacity(512);
     let mut solver = Solver::new();
 
@@ -115,7 +146,7 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
         let len = match stream.read(as_u8_mut(&mut buffer)) {
             Ok(len) => len,
             Err(error) => {
-                error!("Failed to read from validator {address}, {error}");
+                error!("Failed to read from validator {validator_uid}, {error}");
                 return;
             }
         };
@@ -129,11 +160,11 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
         match stream.write(&as_u8(&buffer)[..len]) {
             Ok(len) => {
                 if len == 0 {
-                    error!("Validator {address}'s connection does not appear to be writable");
+                    error!("Validator {validator_uid}'s connection does not appear to be writable");
                 }
             }
             Err(error) => {
-                error!("Failed to write to validator {address}, {error}");
+                error!("Failed to write to validator {validator_uid}, {error}");
                 return;
             }
         }
@@ -141,29 +172,39 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr) {
 }
 
 struct Miner {
+    account_id: AccountId,
     subtensor: Subtensor,
     current_block: u64,
     last_block_fetch: Instant,
     neurons: Vec<NeuronInfoLite>,
     last_metagraph_sync: u64,
+    uid: u16,
 }
 
 impl Miner {
     async fn new() -> Self {
-        let subtensor = Subtensor::new(&*subnet_config::CHAIN_ENDPOINT)
+        let account_id: AccountId = todo!();
+
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
             .await
             .unwrap();
 
         let current_block = subtensor.get_block_number().await.unwrap();
         let last_block_fetch = Instant::now();
-        let neurons = subtensor.get_neurons(*subnet_config::NETUID).await.unwrap();
+        let neurons = subtensor.get_neurons(*config::NETUID).await.unwrap();
+
+        let neuron = neurons.iter().find(|&info| info.hotkey == account_id).expect("Not registered");
+
+        let uid = neuron.uid.0;
 
         Self {
+            account_id,
             subtensor,
             current_block,
             last_block_fetch,
             neurons,
             last_metagraph_sync: current_block,
+            uid,
         }
     }
 
@@ -171,9 +212,13 @@ impl Miner {
         self.current_block = self.subtensor.get_block_number().await?;
         self.last_block_fetch = now;
 
-        if self.current_block - self.last_metagraph_sync >= *subnet_config::EPOCH_LENGTH {
-            self.neurons = self.subtensor.get_neurons(*subnet_config::NETUID).await?;
+        if self.current_block - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
+            self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+
+            let neuron = self.neurons.iter().find(|&info| info.hotkey == self.account_id).expect("Not registered");
+
             self.last_metagraph_sync = self.current_block;
+            self.uid = neuron.uid.0;
         }
 
         Ok(())
@@ -195,8 +240,28 @@ impl Miner {
                 }
             }
 
-            if let Ok((stream, address)) = listener.accept() {
-                pool.execute(move || handle_connection(stream, address));
+            if let Ok((mut stream, address)) = listener.accept() {
+                info!("Validator {address} has connected");
+
+                let message = read::<VerificationMessage>(&mut stream);
+
+                if !info_matches(&message, &self.neurons, &self.account_id, self.uid) {
+                    info!("{address} sent a signed message with incorrect information");
+                    return;
+                }
+
+                let signature_matches = {
+                    let signature = read::<KeypairSignature>(&mut stream);
+
+                    signature_matches(&signature, &message)
+                };
+
+                if !signature_matches {
+                    info!("{address} sent a signed message with an incorrect signature");
+                    return;
+                }
+
+                pool.execute(move || handle_connection(stream, message.validator.uid));
             }
         }
     }

@@ -1,7 +1,8 @@
+extern crate core;
+
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::net::IpAddr;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -9,18 +10,22 @@ use hex;
 use parity_scale_codec::{Compact, Decode};
 use serde_json::Value;
 use subxt::client::OnlineClient;
-use subxt::ext::sp_core::{sr25519, Pair};
+use subxt::ext::sp_core::{Pair, sr25519};
 use subxt::tx::PairSigner;
 use subxt::{Config, SubstrateConfig};
 use thiserror::Error;
 
-pub mod subnet_config;
-pub mod wallet_config;
+pub mod config;
+pub mod auth;
 
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
 type SubtensorConfig = SubstrateConfig;
 pub type AccountId = <SubtensorConfig as Config>::AccountId;
+
+pub type Keypair = sr25519::Pair;
+pub type PublicKey = sr25519::Public;
+pub type Signer = PairSigner<SubtensorConfig, Keypair>;
 
 #[derive(Decode, Default, Clone, Debug)]
 pub struct AxonInfo {
@@ -78,39 +83,22 @@ impl Display for InvalidAccountJsonError {
     }
 }
 
-pub struct Keypair(PairSigner<SubtensorConfig, sr25519::Pair>);
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("Compilation is only allowed for 64-bit targets");
 
-impl Deref for Keypair {
-    type Target = PairSigner<SubtensorConfig, sr25519::Pair>;
+#[cfg(not(target_endian = "little"))]
+compile_error!("Compilation is only allowed for little-endian based processors");
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-pub fn hotkey_location_with_home(
-    mut home_directory: PathBuf,
+pub fn hotkey_location(
+    mut wallet_path: PathBuf,
     wallet_name: impl AsRef<Path>,
     hotkey_name: impl AsRef<Path>,
 ) -> PathBuf {
-    home_directory.push(".bittensor");
-    home_directory.push("wallets");
-    home_directory.push(wallet_name);
-    home_directory.push("hotkeys");
-    home_directory.push(hotkey_name);
+    wallet_path.push(wallet_name);
+    wallet_path.push("hotkeys");
+    wallet_path.push(hotkey_name);
 
-    home_directory
-}
-
-pub fn hotkey_location(
-    wallet_name: impl AsRef<Path>,
-    hotkey_name: impl AsRef<Path>,
-) -> Option<PathBuf> {
-    Some(hotkey_location_with_home(
-        dirs::home_dir()?,
-        wallet_name,
-        hotkey_name,
-    ))
+    wallet_path
 }
 
 pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
@@ -130,10 +118,8 @@ pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     Ok(decoded)
 }
 
-impl Keypair {
-    pub fn from_seed(seed: &[u8]) -> Result<Self> {
-        Ok(Self(PairSigner::new(sr25519::Pair::from_seed_slice(seed)?)))
-    }
+pub fn signer_from_seed(seed: &[u8]) -> Result<Signer> {
+    Ok(Signer::new(sr25519::Pair::from_seed_slice(seed)?))
 }
 
 impl Subtensor {
@@ -161,7 +147,7 @@ impl Subtensor {
 
     pub async fn set_weights(
         &self,
-        keypair: &Keypair,
+        signer: &Signer,
         netuid: u16,
         weights: Vec<(u16, u16)>,
         version_key: u64,
@@ -175,7 +161,7 @@ impl Subtensor {
 
         self.client
             .tx()
-            .sign_and_submit_default(&set_weights_payload, &keypair.0)
+            .sign_and_submit_default(&set_weights_payload, signer)
             .await?;
 
         Ok(())
@@ -183,7 +169,7 @@ impl Subtensor {
 
     pub async fn serve_axon(
         &self,
-        keypair: &Keypair,
+        signer: &Signer,
         netuid: u16,
         ip: IpAddr,
         port: u16,
@@ -207,7 +193,7 @@ impl Subtensor {
 
         self.client
             .tx()
-            .sign_and_submit_default(&serve_axon_payload, &keypair.0)
+            .sign_and_submit_default(&serve_axon_payload, signer)
             .await?;
 
         Ok(())

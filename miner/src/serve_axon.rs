@@ -1,4 +1,4 @@
-use neuron::{hotkey_location, load_key_seed, subnet_config, wallet_config, Keypair, Subtensor};
+use neuron::{hotkey_location, load_key_seed, config, wallet_config, Keypair, Subtensor};
 use std::net::IpAddr;
 
 use clap::Parser;
@@ -16,14 +16,13 @@ async fn main() {
     let args: Cli = Cli::parse();
 
     let hotkey_location =
-        hotkey_location(&*wallet_config::WALLET_NAME, &*wallet_config::HOTKEY_NAME)
-            .expect("No home directory found");
+        hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
 
     let seed = load_key_seed(&hotkey_location).unwrap();
 
     let keypair = Keypair::from_seed(&seed).unwrap();
 
-    let subtensor = Subtensor::new(&*subnet_config::CHAIN_ENDPOINT)
+    let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
         .await
         .unwrap();
 
@@ -31,7 +30,7 @@ async fn main() {
     subtensor
         .serve_axon(
             &keypair,
-            *subnet_config::NETUID,
+            *config::NETUID,
             args.ip,
             args.port.unwrap_or_else(|| *miner_config::PORT),
             false,
