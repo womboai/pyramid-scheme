@@ -184,7 +184,7 @@ struct Miner {
 impl Miner {
     async fn new() -> Self {
         let hotkey_location = hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
-        let account_id = load_key_account_id(&hotkey_location);
+        let account_id = load_key_account_id(&hotkey_location).unwrap();
 
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
             .await
