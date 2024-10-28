@@ -11,7 +11,7 @@ use anyhow::Result;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
-use neuron::{AccountId, NeuronInfoLite, config, Subtensor};
+use neuron::{AccountId, NeuronInfoLite, config, Subtensor, hotkey_location, load_key_account_id};
 use neuron::auth::{KeypairSignature, VerificationMessage, signature_matches};
 
 mod miner_config;
@@ -183,7 +183,8 @@ struct Miner {
 
 impl Miner {
     async fn new() -> Self {
-        let account_id: AccountId = todo!();
+        let hotkey_location = hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
+        let account_id = load_key_account_id(&hotkey_location);
 
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
             .await

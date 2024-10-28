@@ -118,6 +118,23 @@ pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     Ok(decoded)
 }
 
+pub fn load_key_account_id(path: impl AsRef<Path>) -> Result<AccountId> {
+    let json: Value = serde_json::from_reader(File::open(&path)?)?;
+
+    let seed = json
+        .as_object()
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?
+        .get("accountId")
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?
+        .as_str()
+        .ok_or_else(|| InvalidAccountJsonError(path.as_ref().to_path_buf()))?;
+
+    let mut decoded = [0; 32];
+    hex::decode_to_slice(&seed[2..], &mut decoded)?;
+
+    Ok(AccountId::from(decoded))
+}
+
 pub fn signer_from_seed(seed: &[u8]) -> Result<Signer> {
     Ok(Signer::new(sr25519::Pair::from_seed_slice(seed)?))
 }
@@ -149,13 +166,13 @@ impl Subtensor {
         &self,
         signer: &Signer,
         netuid: u16,
-        weights: Vec<(u16, u16)>,
+        weights: impl Iterator<Item=(u16, u16)> + Clone,
         version_key: u64,
     ) -> Result<()> {
         let set_weights_payload = api::tx().subtensor_module().set_weights(
             netuid,
-            weights.iter().map(|(uid, _)| *uid).collect(),
-            weights.iter().map(|(_, weight)| *weight).collect(),
+            weights.clone().map(|(uid, _)| uid).collect(),
+            weights.map(|(_, weight)| weight).collect(),
             version_key,
         );
 

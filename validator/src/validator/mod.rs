@@ -1,5 +1,5 @@
 use std::cell::UnsafeCell;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -67,8 +67,9 @@ impl DerefMut for CurrentRow {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
+    score: u128,
+    bad_responses: u8,
     hotkey: AccountId,
-    score: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,7 +80,7 @@ struct ValidatorState {
 
 impl ValidatorState {
     fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
-        let key_info = hotkeys.map(|hotkey| KeyScoreInfo { hotkey, score: 0 }).collect();
+        let key_info = hotkeys.map(|hotkey| KeyScoreInfo { hotkey, score: 0, bad_responses: 0 }).collect();
 
         Self { step: 1, key_info }
     }
@@ -235,6 +236,40 @@ impl Validator {
         Ok(serde_json::from_str(&json)?)
     }
 
+    async fn set_weights(&self) -> Result<()> {
+        if self.state.key_info.is_empty() {
+            return Ok(());
+        }
+
+        let max_score = self.state.key_info.iter().map(|info| info.score).max().unwrap();
+
+        if max_score == 0 {
+            self.subtensor
+                .set_weights(
+                    &self.signer,
+                    *config::NETUID,
+                    (0..self.state.key_info.len()).into_iter().map(|uid| (uid as u16, u16::MAX)),
+                    VERSION_KEY,
+                )
+                .await?;
+        } else {
+            self.subtensor
+                .set_weights(
+                    &self.signer,
+                    *config::NETUID,
+                    self.state
+                        .key_info
+                        .iter()
+                        .enumerate()
+                        .map(|(uid, &ref info)| (uid as u16, ((info.score * u16::MAX as u128) / max_score) as u16)),
+                    VERSION_KEY,
+                )
+                .await?;
+        };
+
+        Ok(())
+    }
+
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
         self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
@@ -265,24 +300,13 @@ impl Validator {
                 .resize_with(self.neurons.len(), || KeyScoreInfo {
                     hotkey: self.neurons[uid_iterator.next().unwrap()].hotkey.clone(),
                     score: 0,
+                    bad_responses: 0,
                 });
         }
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            self.subtensor
-                .set_weights(
-                    &self.signer,
-                    *config::NETUID,
-                    self.state
-                        .key_info
-                        .iter()
-                        .enumerate()
-                        .map(|(uid, &ref info)| (uid as u16, info.score))
-                        .collect(),
-                    VERSION_KEY,
-                )
-                .await?;
+            self.set_weights()?;
         }
 
         Ok(())
