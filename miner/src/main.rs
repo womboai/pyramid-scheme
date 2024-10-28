@@ -3,14 +3,15 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
-use std::slice;
 use std::time::{Duration, Instant};
+use std::slice;
 
 use anyhow::Result;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
-use neuron::{config, NeuronInfoLite, Subtensor};
+use neuron::{subnet_config, NeuronInfoLite, Subtensor};
+mod miner_config;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
@@ -149,11 +150,13 @@ struct Miner {
 
 impl Miner {
     async fn new() -> Self {
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = Subtensor::new(&*subnet_config::CHAIN_ENDPOINT)
+            .await
+            .unwrap();
 
         let current_block = subtensor.get_block_number().await.unwrap();
         let last_block_fetch = Instant::now();
-        let neurons = subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let neurons = subtensor.get_neurons(*subnet_config::NETUID).await.unwrap();
 
         Self {
             subtensor,
@@ -168,17 +171,17 @@ impl Miner {
         self.current_block = self.subtensor.get_block_number().await?;
         self.last_block_fetch = now;
 
-        if self.current_block - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
-            self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+        if self.current_block - self.last_metagraph_sync >= *subnet_config::EPOCH_LENGTH {
+            self.neurons = self.subtensor.get_neurons(*subnet_config::NETUID).await?;
             self.last_metagraph_sync = self.current_block;
         }
 
         Ok(())
     }
 
-    async fn run(&mut self) {
+    async fn run(&mut self, port: u16) {
         let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
-        let listener = TcpListener::bind((ip, 8000)).unwrap();
+        let listener = TcpListener::bind((ip, port)).unwrap();
         let pool = ThreadPool::new(32);
 
         listener.set_nonblocking(true).unwrap();
@@ -201,5 +204,5 @@ impl Miner {
 
 #[tokio::main]
 async fn main() {
-    Miner::new().await.run().await;
+    Miner::new().await.run(*miner_config::PORT).await;
 }

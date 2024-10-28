@@ -7,6 +7,10 @@ edition = "2021"
 name = "miner"
 path = "src/main.rs"
 
+[[bin]]
+name = "serve-axon"
+path = "src/serve_axon.rs"
+
 [dependencies]
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -15,5 +19,7 @@ tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 
 threadpool = { workspace = true }
+
+clap = { version = "4.5.20", features = ["derive"] }
 
 rule-30-solver-neuron = { path = "../base" }

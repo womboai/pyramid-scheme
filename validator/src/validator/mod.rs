@@ -1,23 +1,24 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::{fs, mem};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 use tokio::time::sleep;
 use tracing::{error, info};
 
 use neuron::{
-    config, hotkey_location, load_key_seed, AccountId, Keypair, NeuronInfoLite, Subtensor,
+    hotkey_location, load_key_seed, subnet_config, AccountId, Keypair, NeuronInfoLite, Subtensor,
 };
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
+use neuron::wallet_config;
 
 mod memory_storage;
 
@@ -120,7 +121,7 @@ impl Validator {
     fn not_registered(account_id: &AccountId) -> ! {
         panic!(
             "Hotkey {account_id} is not registered in sn{}",
-            *config::NETUID
+            *subnet_config::NETUID
         );
     }
 
@@ -144,15 +145,20 @@ impl Validator {
     }
 
     pub async fn new() -> Self {
-        let hotkey_location = hotkey_location(&*config::WALLET_NAME, &*config::HOTKEY_NAME)
-            .expect("No home directory found");
+        let hotkey_location =
+            hotkey_location(&*wallet_config::WALLET_NAME, &*wallet_config::HOTKEY_NAME)
+                .expect("No home directory found");
+
         let seed = load_key_seed(&hotkey_location).unwrap();
 
         let keypair = Keypair::from_seed(&seed).unwrap();
 
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = Subtensor::new(&*subnet_config::CHAIN_ENDPOINT)
+            .await
+            .unwrap();
 
-        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let neurons: Vec<NeuronInfoLite> =
+            subtensor.get_neurons(*subnet_config::NETUID).await.unwrap();
 
         let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
         let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
@@ -167,8 +173,11 @@ impl Validator {
 
         fs::create_dir_all("state").unwrap();
 
-        let mut current_row =
-            CurrentRow::open("state/current_row.bin", Self::current_row_file_size(state.step)).unwrap();
+        let mut current_row = CurrentRow::open(
+            "state/current_row.bin",
+            Self::current_row_file_size(state.step),
+        )
+        .unwrap();
 
         let mut center_column = MemoryMappedFile::open(
             "state/center_column.bin",
@@ -229,7 +238,7 @@ impl Validator {
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
-        self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+        self.neurons = self.subtensor.get_neurons(*subnet_config::NETUID).await?;
 
         let block = if let Some(block) = block {
             block
@@ -262,11 +271,11 @@ impl Validator {
         }
 
         // Set weights if enough time has passed
-        if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
+        if block - neuron_info.last_update.0 >= *subnet_config::EPOCH_LENGTH {
             self.subtensor
                 .set_weights(
                     &self.keypair,
-                    *config::NETUID,
+                    *subnet_config::NETUID,
                     self.state
                         .key_info
                         .iter()
@@ -329,12 +338,14 @@ impl Validator {
         let current_block = self.subtensor.get_block_number().await?;
         let elapsed_blocks = current_block - self.last_metagraph_sync;
 
-        if elapsed_blocks >= *config::EPOCH_LENGTH {
+        if elapsed_blocks >= *subnet_config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
 
-        self.current_row.ensure_capacity(Self::current_row_file_size(self.state.step))?;
-        self.center_column.ensure_capacity(Self::center_column_file_size(self.state.step))?;
+        self.current_row
+            .ensure_capacity(Self::current_row_file_size(self.state.step))?;
+        self.center_column
+            .ensure_capacity(Self::center_column_file_size(self.state.step))?;
 
         let mut connections = self.connect_to_miners();
 
@@ -372,13 +383,13 @@ impl Validator {
         for i in 1..connection_count - 1 {
             let end = ((i + 1) * chunk_size) as usize;
 
-            let [a, b] = self.current_row[end..end+1] else {
+            let [a, b] = self.current_row[end..end + 1] else {
                 unreachable!()
             };
 
             let (a, b) = Self::normalize_pair(a, b);
 
-            self.current_row[end..end+1].copy_from_slice(&[a, b]);
+            self.current_row[end..end + 1].copy_from_slice(&[a, b]);
         }
 
         let bit_index = self.state.step % 8;

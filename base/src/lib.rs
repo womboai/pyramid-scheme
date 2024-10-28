@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::fs::File;
+use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,8 @@ use subxt::tx::PairSigner;
 use subxt::{Config, SubstrateConfig};
 use thiserror::Error;
 
-pub mod config;
+pub mod subnet_config;
+pub mod wallet_config;
 
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
@@ -174,6 +176,38 @@ impl Subtensor {
         self.client
             .tx()
             .sign_and_submit_default(&set_weights_payload, &keypair.0)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn serve_axon(
+        &self,
+        keypair: &Keypair,
+        netuid: u16,
+        ip: IpAddr,
+        port: u16,
+        udp: bool,
+    ) -> Result<()> {
+        let (ip, ip_type) = match ip {
+            IpAddr::V4(v4) => (u32::from(v4) as u128, 4),
+            IpAddr::V6(v6) => (u128::from(v6), 6),
+        };
+
+        let serve_axon_payload = api::tx().subtensor_module().serve_axon(
+            netuid,
+            008_000_000, // Masquerade as version 8.0.0 of btcli, for no particular reason,
+            ip,
+            port,
+            ip_type,
+            u8::from(udp),
+            0,
+            0,
+        );
+
+        self.client
+            .tx()
+            .sign_and_submit_default(&serve_axon_payload, &keypair.0)
             .await?;
 
         Ok(())
