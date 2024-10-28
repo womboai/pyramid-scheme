@@ -65,7 +65,7 @@ export EPOCH_LENGTH=100
 ```
 
 #### Running a miner
-Then, to run a miner, export the extra PORT environment variable along with wallet info, and serve the port to chain:
+Then, to run a miner, export the extra PORT environment variable along with wallet info as needed, and serve the port to chain:
 ```bash
 export PORT=8091
 export WALLET_NAME=default
@@ -86,7 +86,7 @@ pm2 start --name rule-30-miner --interpreter none -- cargo run --bin miner
 ```
 
 #### Running a validator
-Then, to run a validator, export the wallet info:
+Then, to run a validator, export the wallet info as needed:
 ```bash
 export WALLET_NAME=default
 export HOTKEY_NAME=default
