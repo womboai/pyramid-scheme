@@ -28,10 +28,31 @@ While major research institutions have explored these phenomena using traditiona
 
 Through this subnet, we aim to generate and analyze the first 1 trillion values of Rule 30's center column, potentially unlocking new approaches to cryptography, pattern recognition, and artificial intelligence.
 
-
 ## The Rule 30 Challenge
 
 Cellular automata are mathematical models that demonstrate how complex behavior can emerge from simple rules. Rule 30, introduced by Stephen Wolfram, is particularly fascinating—despite following elementary rules, it generates patterns that appear random and unpredictable, challenging our understanding of complexity and computation.
+
+**Here's how it works:**
+
+The automaton operates on a grid where each cell can be either alive (white) or dead (black). Each new cell's state is determined by looking at three cells above it - itself and its two immediate neighbors
+
+Starting from a single black cell, Rule 30 generates an intricate pattern that:
+- Appears random in its center column
+- Creates complex, asymmetric triangular patterns
+- Never becomes periodic in its first billion steps
+
+The transition rules for Rule 30 are:
+
+![Rule 30 Transition Rules](rules.png)
+
+<div align="center">
+  
+![Rule 30 Animation](rule30_animation.gif)
+
+</div>
+
+
+The name "Rule 30" comes from converting these output states to binary (00011110), which equals 30 in decimal.
 
 Wolfram posed three fundamental questions about Rule 30 that remain unanswered:
 1. **Pattern Periodicity**: Does the center column always remain non-periodic?
@@ -44,6 +65,7 @@ These questions strike at the heart of complexity science and have profound impl
 - **Cryptography**: Understanding pattern generation for secure systems
 - **Machine Learning**: Training models on emergent behavior
 - **Complex Systems**: Predicting outcomes in chaotic systems
+
 
 Recent research has demonstrated that transformer [models trained on cellular automata data exhibit enhanced performance on advanced tasks](http://www.arxiv.org/pdf/2410.02536). By generating a massive dataset of Rule 30 computations, our project enables new approaches to AI model training while working towards answers to Wolfram's fundamental questions.
 
@@ -104,6 +126,30 @@ cargo run --bin validator
 # With PM2
 pm2 start --name rule-30-validator --interpreter none -- cargo run --bin validator
 ```
+
+## Roadmap
+
+Given the complexity of analyzing and leveraging cellular automata for advanced computation and AI, we've divided our roadmap into three strategic phases:
+
+**Phase 1: Infrastructure & Data Collection**
+
+- [ ] Subnet launch with CPU computation and robust mechanism to calculate pattern segments
+- [ ] Scalable data collection framework targeting major milestones: 1B, 10B, 100B rows, with path to 1T
+- [ ] Public analytics dashboard for real-time pattern analysis and subnet metrics
+- [ ] GPU acceleration implementation for enhanced computation speed
+
+**Phase 2: Pattern Analysis & Research** 
+- [ ] Research partnerships with academic institutions focused on cellular automata
+- [ ] Open-source release of Rule 30 dataset with comprehensive analysis tools
+- [ ] Development of pattern recognition models and benchmarking framework
+- [ ] Integration with existing machine learning frameworks
+
+**Phase 3: Advanced Applications**
+- [ ] Integration of Rule 30 patterns into foundation model training
+- [ ] Expansion to other elementary cellular automata rules
+- [ ] Infrastructure adaptation for broader computational applications
+- [ ] Research grants program for novel applications and discoveries
+
 
 ## License
 The Rule 30 Bittensor subnet is released under the [MIT License](./LICENSE).
