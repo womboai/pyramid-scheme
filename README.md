@@ -14,6 +14,9 @@
 - [Overview of Miner and Validator Functionality](#overview-of-miner-and-validator-functionality)
   - [Miner](#miner)
   - [Validator](#validator)
+- [Running a miner or validator](#running-a-miner-or-validator)
+  - [Running a miner](#running-a-miner)
+  - [Running a validator](#running-a-validator)
 - [License](#license)
 
 
@@ -56,7 +59,7 @@ To solve the fundamental questions posed by Wolfram, our subnet coordinates vali
 
 **Validators:** distribute computational tasks and verify results. Since Rule 30 is deterministic, validation is straightforward - each computation has exactly one correct answer. Validators check accuracy, measure response time, and reward miners accordingly.
 
-### Running a miner or validator
+## Running a miner or validator
 To run either a miner or validator, export the following environment variables as needed(all are optional):
 ```bash
 export CHAIN_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443 
@@ -64,7 +67,7 @@ export NETUID=36
 export EPOCH_LENGTH=100 # Interval length to sync metagraph or set weights
 ```
 
-#### Running a miner
+### Running a miner
 Then, to run a miner, export the extra PORT environment variable along with wallet info as needed, and serve the port to chain:
 ```bash
 export PORT=8091
@@ -85,7 +88,7 @@ cargo run --bin miner
 pm2 start --name rule-30-miner --interpreter none -- cargo run --bin miner
 ```
 
-#### Running a validator
+### Running a validator
 Then, to run a validator, export the wallet info as needed:
 ```bash
 export WALLET_NAME=default
@@ -107,7 +110,7 @@ The Rule 30 Bittensor subnet is released under the [MIT License](./LICENSE).
 
 <div align="center">
   <img src="https://content.wombo.ai/bittensor/logo.png" alt="WOMBO AI" width="100" style="margin-bottom: 10px;"/>
-  <p>Connect with us on social media</p>
+  <p>Connect with us</p>
   <a href="https://twitter.com/wombo" style="margin-right: 10px;">
     <img src="https://content.wombo.ai/bittensor/twitter.png" alt="Twitter" width="20"/>
   </a>
