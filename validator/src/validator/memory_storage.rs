@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
 use std::{fs, io::Result};
 
@@ -81,6 +81,12 @@ impl DerefMut for MemoryMappedFile {
 pub struct MemoryMappedStorage {
     swap_file: MemoryMappedFile,
     storage_path: PathBuf,
+}
+
+impl MemoryMappedStorage {
+    pub fn map_original(&self, range: Range<u64>) -> MemoryMappedFile {
+        todo!()
+    }
 }
 
 impl MemoryMapped for MemoryMappedStorage {

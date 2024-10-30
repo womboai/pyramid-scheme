@@ -10,13 +10,13 @@ use hex;
 use parity_scale_codec::{Compact, Decode};
 use serde_json::Value;
 use subxt::client::OnlineClient;
-use subxt::ext::sp_core::{Pair, sr25519};
+use subxt::ext::sp_core::{sr25519, Pair};
 use subxt::tx::PairSigner;
 use subxt::{Config, SubstrateConfig};
 use thiserror::Error;
 
-pub mod config;
 pub mod auth;
+pub mod config;
 
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
@@ -166,7 +166,7 @@ impl Subtensor {
         &self,
         signer: &Signer,
         netuid: u16,
-        weights: impl Iterator<Item=(u16, u16)> + Clone,
+        weights: impl Iterator<Item = (u16, u16)> + Clone,
         version_key: u64,
     ) -> Result<()> {
         let set_weights_payload = api::tx().subtensor_module().set_weights(

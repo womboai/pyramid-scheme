@@ -1,4 +1,7 @@
 #![feature(portable_simd)]
+#![feature(random)]
+#![feature(sync_unsafe_cell)]
+#![feature(ptr_as_ref_unchecked)]
 
 use tokio;
 use tracing::info;

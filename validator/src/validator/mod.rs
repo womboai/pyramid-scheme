@@ -1,10 +1,12 @@
 use std::cell::UnsafeCell;
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::fs;
 use std::io::{Read, Write};
+use std::mem::transmute;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::random::random;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,17 +14,21 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 use tokio::time::sleep;
-use tracing::{error, info};
-
-use neuron::{AccountId, config, hotkey_location, load_key_seed, NeuronInfoLite, Signer, signer_from_seed, Subtensor};
-use neuron::auth::{KeyRegistrationInfo, sign_message, VerificationMessage};
+use tracing::{error, info, warn};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
+use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
+use neuron::{
+    config, hotkey_location, load_key_seed, signer_from_seed, AccountId, NeuronInfoLite, Signer,
+    Subtensor,
+};
 
 mod memory_storage;
 
 const VERSION_KEY: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
+const VALIDATION_CHANCE: f32 = 0.05;
+const VALIDATION_BYTES: u64 = 256;
 
 struct CurrentRow(Arc<UnsafeCell<MemoryMappedStorage>>);
 
@@ -50,6 +56,7 @@ impl MemoryMapped for CurrentRow {
 }
 
 unsafe impl Send for CurrentRow {}
+unsafe impl Sync for CurrentRow {}
 
 impl Deref for CurrentRow {
     type Target = MemoryMappedStorage;
@@ -68,7 +75,7 @@ impl DerefMut for CurrentRow {
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
     score: u128,
-    bad_responses: u8,
+    cheater: bool,
     hotkey: AccountId,
 }
 
@@ -80,7 +87,13 @@ struct ValidatorState {
 
 impl ValidatorState {
     fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
-        let key_info = hotkeys.map(|hotkey| KeyScoreInfo { hotkey, score: 0, bad_responses: 0 }).collect();
+        let key_info = hotkeys
+            .map(|hotkey| KeyScoreInfo {
+                hotkey,
+                score: 0,
+                cheater: false,
+            })
+            .collect();
 
         Self { step: 1, key_info }
     }
@@ -95,15 +108,60 @@ impl Default for ValidatorState {
     }
 }
 
+struct NeuronData {
+    score: UnsafeCell<u128>,
+    cheater: UnsafeCell<bool>,
+    connection: UnsafeCell<Option<TcpStream>>,
+    info: NeuronInfoLite,
+}
+
+trait UnsafeCellImmutableBorrow<T> {
+    fn as_ref(&self) -> &T;
+}
+
+trait UnsafeCellImmutableCopy<T> {
+    fn inner(&self) -> T;
+}
+
+impl<T> UnsafeCellImmutableBorrow<T> for UnsafeCell<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { &*self.get() }
+    }
+}
+
+impl<T> UnsafeCellImmutableCopy<T> for UnsafeCell<T> where T : Copy {
+    fn inner(&self) -> T {
+        *self.as_ref()
+    }
+}
+
+struct SendPtr<T>(*mut T);
+
+unsafe impl<T> Send for SendPtr<T> {}
+
+impl<T> From<*mut T> for SendPtr<T> {
+    fn from(value: *mut T) -> Self {
+        SendPtr(value)
+    }
+}
+
+impl<T> Deref for SendPtr<T> {
+    type Target = *mut T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub struct Validator {
     signer: Signer,
     subtensor: Subtensor,
-    neurons: Vec<NeuronInfoLite>,
+    neurons: Vec<NeuronData>,
     uid: u16,
 
     current_row: CurrentRow,
     center_column: MemoryMappedFile,
-    state: ValidatorState,
+    step: u64,
 
     last_metagraph_sync: u64,
 
@@ -145,27 +203,27 @@ impl Validator {
     }
 
     pub async fn new() -> Self {
-        let hotkey_location =
-            hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
+        let hotkey_location = hotkey_location(
+            config::WALLET_PATH.clone(),
+            &*config::WALLET_NAME,
+            &*config::HOTKEY_NAME,
+        );
 
         let seed = load_key_seed(&hotkey_location).unwrap();
 
-        let keypair = signer_from_seed(&seed).unwrap();
+        let signer = signer_from_seed(&seed).unwrap();
 
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
-            .await
-            .unwrap();
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-        let neurons: Vec<NeuronInfoLite> =
-            subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
         let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
-        let neuron_info = Self::find_neuron_info(&neurons, keypair.account_id());
+        let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
 
         let uid = if let Some(neuron_info) = neuron_info {
             neuron_info.uid.0
         } else {
-            Self::not_registered(keypair.account_id());
+            Self::not_registered(signer.account_id());
         };
 
         let state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
@@ -190,14 +248,37 @@ impl Validator {
             center_column[0] = 1;
         }
 
+        let neurons = neurons
+            .into_iter()
+            .map(|info| {
+                let state_info = &state.key_info[info.uid.0 as usize];
+
+                if state_info.hotkey == info.hotkey {
+                    NeuronData {
+                        score: state_info.score.into(),
+                        cheater: state_info.cheater.into(),
+                        connection: Self::connect_to_miner(&signer, uid, &info, state_info.cheater).into(),
+                        info,
+                    }
+                } else {
+                    NeuronData {
+                        score: 0.into(),
+                        cheater: false.into(),
+                        connection: Self::connect_to_miner(&signer, uid, &info, false).into(),
+                        info,
+                    }
+                }
+            })
+            .collect();
+
         Self {
-            signer: keypair,
+            signer,
             subtensor,
             neurons,
             uid,
             current_row,
             center_column,
-            state,
+            step: state.step,
             last_metagraph_sync,
             thread_pool: ThreadPool::new(256),
         }
@@ -217,7 +298,20 @@ impl Validator {
             fs::create_dir_all(parent)?;
         }
 
-        let json = serde_json::to_string(&self.state)?;
+        let state = ValidatorState {
+            key_info: self
+                .neurons
+                .iter()
+                .map(|data| KeyScoreInfo {
+                    hotkey: data.info.hotkey.clone(),
+                    cheater: data.cheater.inner(),
+                    score: data.score.inner(),
+                })
+                .collect(),
+            step: self.step,
+        };
+
+        let json = serde_json::to_string(&state)?;
 
         fs::write(&path, json)?;
 
@@ -237,41 +331,38 @@ impl Validator {
     }
 
     async fn set_weights(&self) -> Result<()> {
-        if self.state.key_info.is_empty() {
+        if self.neurons.is_empty() {
             return Ok(());
         }
 
-        let max_score = self.state.key_info.iter().map(|info| info.score).max().unwrap();
+        let max_score = self
+            .neurons
+            .iter()
+            .map(|info| if info.cheater.inner() { 0 } else { info.score.inner() })
+            .max()
+            .unwrap();
 
-        if max_score == 0 {
-            self.subtensor
-                .set_weights(
-                    &self.signer,
-                    *config::NETUID,
-                    (0..self.state.key_info.len()).into_iter().map(|uid| (uid as u16, u16::MAX)),
-                    VERSION_KEY,
-                )
-                .await?;
-        } else {
-            self.subtensor
-                .set_weights(
-                    &self.signer,
-                    *config::NETUID,
-                    self.state
-                        .key_info
-                        .iter()
-                        .enumerate()
-                        .map(|(uid, &ref info)| (uid as u16, ((info.score * u16::MAX as u128) / max_score) as u16)),
-                    VERSION_KEY,
-                )
-                .await?;
-        };
+        let scores = self.neurons.iter().map(|neuron| {
+            let normalized_score = if neuron.cheater.inner() {
+                0
+            } else if max_score == 0 {
+                u16::MAX
+            } else {
+                ((neuron.score.inner() * u16::MAX as u128) / max_score) as u16
+            };
+
+            (neuron.info.uid.0, normalized_score)
+        });
+
+        self.subtensor
+            .set_weights(&self.signer, *config::NETUID, scores, VERSION_KEY)
+            .await?;
 
         Ok(())
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
-        self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+        let neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
         let block = if let Some(block) = block {
             block
@@ -281,7 +372,7 @@ impl Validator {
 
         self.last_metagraph_sync = block;
 
-        let neuron_info = Self::find_neuron_info(&self.neurons, self.signer.account_id());
+        let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
         let neuron_info = if let Some(neuron_info) = neuron_info {
             neuron_info
@@ -291,140 +382,301 @@ impl Validator {
 
         self.uid = neuron_info.uid.0;
 
-        // Update scores array size if needed
-        if self.state.key_info.len() != self.neurons.len() {
-            let mut uid_iterator = (self.state.key_info.len()..self.neurons.len()).into_iter();
+        // Update changed hotkeys
+        for i in 0..self.neurons.len() {
+            if self.neurons[i].info.hotkey != neurons[i].hotkey {
+                let info = neurons[i].clone();
 
-            self.state
-                .key_info
-                .resize_with(self.neurons.len(), || KeyScoreInfo {
-                    hotkey: self.neurons[uid_iterator.next().unwrap()].hotkey.clone(),
-                    score: 0,
-                    bad_responses: 0,
-                });
+                self.neurons[i] = NeuronData {
+                    score: 0.into(),
+                    cheater: false.into(),
+                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false).into(),
+                    info,
+                };
+            }
+        }
+
+        // Update scores array size if needed
+        if self.neurons.len() != neurons.len() {
+            let mut uid_iterator = (self.neurons.len()..neurons.len()).into_iter();
+
+            self.neurons.resize_with(neurons.len(), || {
+                let info = neurons[uid_iterator.next().unwrap()].clone();
+
+                NeuronData {
+                    score: 0.into(),
+                    cheater: false.into(),
+                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false).into(),
+                    info,
+                }
+            });
         }
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            self.set_weights()?;
+            self.set_weights().await?;
         }
 
         Ok(())
     }
 
+    fn verify_result(original: &[u8], result: &[u8]) -> bool {
+        let mut last = 0;
+
+        for (i, x) in original.iter().enumerate() {
+            let expected = x ^ (x << 1 | x << 2 | last >> 7 | last >> 6);
+
+            if result[i] != expected {
+                return false;
+            }
+
+            last = *x;
+        }
+
+        true
+    }
+
     fn handle_connection(
         mut current_row: CurrentRow,
-        mut connection: TcpStream,
+        connection_ref: &mut Option<TcpStream>,
+        score: &mut u128,
+        cheater: &mut bool,
         start: u64,
         end: u64,
     ) {
+        let connection = connection_ref.as_mut().unwrap();
+
         let buffer_size = min(end - start, 8 * 4 * 256);
 
         let iterations = (end - start).div_ceil(buffer_size);
+
+        let chance =
+            VALIDATION_CHANCE * iterations as f32 - VALIDATION_CHANCE.powi(iterations as i32);
+
+        let validation_start_index = if random::<u16>() as f32 / u16::MAX as f32 <= chance {
+            let t = random::<u16>() as f32 / u16::MAX as f32;
+            let validation_start_index = ((end - start) as f32 * t) as u64;
+
+            Some(validation_start_index)
+        } else {
+            None
+        };
+
+        let mut added = 0;
 
         for i in 0..iterations {
             let from = (start + i * buffer_size) as usize;
             let to = (start + (i + 1) * buffer_size) as usize;
 
-            // TODO error handle
-            connection.write(&current_row[from..to]).unwrap();
-            connection.read(&mut current_row[from..to]).unwrap();
-        }
-    }
+            while added != to - from {
+                let written = match connection.write(&current_row[from + added..to]) {
+                    Ok(len) => {
+                        if len == 0 {
+                            warn!(
+                                "Failed to write to miner connection while there's more to process"
+                            );
 
-    fn connect_to_miners(&self) -> Vec<(u16, AccountId, TcpStream)> {
-        let mut connections = Vec::with_capacity(256);
+                            return;
+                        }
 
-        for neuron in &self.neurons {
-            let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
-                Ipv4Addr::from(neuron.axon_info.ip as u32).into()
-            } else {
-                Ipv6Addr::from(neuron.axon_info.ip).into()
-            };
+                        len
+                    }
+                    Err(error) => {
+                        error!("Error occurred writing to miner: {error}");
 
-            let address = SocketAddr::new(ip, neuron.axon_info.port);
+                        return;
+                    }
+                };
 
-            info!("Attempting to connect to {address}");
+                let mut read = 0;
 
-            if let Ok(stream) = TcpStream::connect(address) {
-                connections.push((neuron.uid.0, neuron.hotkey.clone(), stream));
+                while read < written {
+                    let range = from + read + added..from + added + written + read;
+
+                    let validation_range = if let Some(validation_start_index) =
+                        validation_start_index
+                    {
+                        if range.contains(&(validation_start_index as usize)) {
+                            Some(validation_start_index..validation_start_index + VALIDATION_BYTES)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let len = match connection.read(&mut current_row[range]) {
+                        Ok(len) => {
+                            if len == 0 {
+                                warn!("Failed to read from miner connection");
+
+                                return;
+                            }
+
+                            len
+                        }
+                        Err(error) => {
+                            error!("Error occurred reading from miner: {error}");
+
+                            return;
+                        }
+                    };
+
+                    if let Some(validation_range) = validation_range {
+                        let mapped = current_row.map_original(validation_range.clone());
+
+                        if !Self::verify_result(
+                            &mapped,
+                            &current_row
+                                [validation_range.start as usize..validation_range.end as usize],
+                        ) {
+                            *cheater = true;
+                            *connection_ref = None;
+
+                            let mapped = current_row.map_original(start..end);
+
+                            (&mut current_row[start as usize..end as usize])
+                                .copy_from_slice(&mapped);
+
+                            return;
+                        }
+                    }
+
+                    read += len;
+                }
+
+                added += written;
             }
         }
 
-        connections
+        *score += added as u128;
+    }
+
+    fn connect_to_miner(signer: &Signer, uid: u16, neuron: &NeuronInfoLite, cheater: bool) -> Option<TcpStream> {
+        if cheater {
+            return None;
+        }
+
+        let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
+            Ipv4Addr::from(neuron.axon_info.ip as u32).into()
+        } else {
+            Ipv6Addr::from(neuron.axon_info.ip).into()
+        };
+
+        let address = SocketAddr::new(ip, neuron.axon_info.port);
+
+        info!("Attempting to connect to {address}");
+
+        match TcpStream::connect(address) {
+            Ok(mut stream) => {
+                let message = VerificationMessage {
+                    nonce: 0,
+                    netuid: *config::NETUID,
+
+                    miner: KeyRegistrationInfo {
+                        uid: neuron.uid.0,
+                        account_id: neuron.hotkey.clone(),
+                    },
+
+                    validator: KeyRegistrationInfo {
+                        uid,
+                        account_id: signer.account_id().clone(),
+                    },
+                };
+
+                let signature = sign_message(signer, &message);
+
+                if let Err(e) = stream.write((&message).as_ref()) {
+                    error!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
+
+                    return None;
+                };
+
+                if let Err(e) = stream.write(&signature) {
+                    error!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
+
+                    return None;
+                }
+
+                Some(stream)
+            }
+            Err(error) => {
+                warn!(
+                    "Couldn't connect to neuron {uid}, {error}",
+                    uid = neuron.uid.0
+                );
+
+                None
+            }
+        }
+    }
+
+    // SAFETY: Unsafe because it extends the lifetime
+    unsafe fn find_connections(&mut self) -> Vec<(u16, &'static mut Option<TcpStream>)> {
+        self.neurons
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(uid, neuron)| {
+                if neuron.connection.as_ref().is_none() {
+                    None
+                } else {
+                    Some((uid as u16, transmute(neuron.connection.get_mut())))
+                }
+            })
+            .collect()
     }
 
     async fn do_step(&mut self) -> Result<()> {
-        info!("Evolution step {}", self.state.step);
+        info!("Evolution step {}", self.step);
 
         let current_block = self.subtensor.get_block_number().await?;
-        let elapsed_blocks = current_block - self.last_metagraph_sync;
+        let mut elapsed_blocks = current_block - self.last_metagraph_sync;
 
         if elapsed_blocks >= *config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
+            elapsed_blocks = 0;
         }
+
+        while self
+            .neurons
+            .iter()
+            .all(|neuron| neuron.connection.as_ref().is_none())
+        {
+            let sleep_for = *config::EPOCH_LENGTH - elapsed_blocks;
+            info!("No miners found, waiting {} blocks", sleep_for);
+
+            sleep(Duration::from_secs(sleep_for * 12)).await;
+            self.sync(Some(current_block)).await?;
+        }
+
+        let connections = unsafe {
+            // SAFETY: Safe because we do not resync(which modifies the references) until the connections are no longer used.
+            self.find_connections()
+        };
 
         self.current_row
-            .ensure_capacity(Self::current_row_file_size(self.state.step))?;
+            .ensure_capacity(Self::current_row_file_size(self.step))?;
+
         self.center_column
-            .ensure_capacity(Self::center_column_file_size(self.state.step))?;
-
-        let mut connections = self.connect_to_miners();
-
-        while connections.is_empty() {
-            info!("No miners found, waiting 60 seconds");
-            sleep(Duration::from_secs(60)).await;
-            connections = self.connect_to_miners();
-        }
+            .ensure_capacity(Self::center_column_file_size(self.step))?;
 
         let connection_count = connections.len() as u64;
 
-        let byte_count = (self.state.step * 2 + 1).div_ceil(8);
+        let byte_count = (self.step * 2 + 1).div_ceil(8);
 
         let chunk_size = byte_count.div_ceil(connection_count);
 
-        // TODO Handle connection prematurely dying or giving invalid results
-        for (index, (uid, account_id, mut connection)) in connections.into_iter().enumerate() {
-            let message = VerificationMessage {
-                nonce: 0,
-                netuid: *config::NETUID,
-
-                miner: KeyRegistrationInfo {
-                    uid,
-                    account_id,
-                },
-
-                validator: KeyRegistrationInfo {
-                    uid: self.uid,
-                    account_id: self.signer.account_id().clone(),
-                },
-            };
-
-            let signature = sign_message(&self.signer, &message);
-
-            if let Err(e) = connection.write((&message).as_ref()) {
-                error!("Failed to write to miner {uid}, {e}");
-
-                continue
-            };
-
-            if let Err(e) = connection.write(&signature) {
-                error!("Failed to write to miner {uid}, {e}");
-
-                continue
-            };
-
+        for (index, (uid, connection)) in connections.into_iter().enumerate() {
             unsafe {
                 // SAFETY: This is safe as the data read/written does not overlap between threads
                 let row = self.current_row.share();
+                let cheater = SendPtr::from(self.neurons[uid as usize].cheater.get());
+                let score = SendPtr::from(self.neurons[uid as usize].score.get());
+
+                let end = min((index as u64 + 1) * chunk_size, byte_count);
 
                 self.thread_pool.execute(move || {
-                    Self::handle_connection(
-                        row,
-                        connection,
-                        index as u64 * chunk_size,
-                        (index as u64 + 1) * chunk_size,
-                    )
+                    Self::handle_connection(row, connection, score.as_mut_unchecked(), cheater.as_mut_unchecked(), index as u64 * chunk_size, end)
                 });
             }
         }
@@ -443,13 +695,13 @@ impl Validator {
             self.current_row[end..end + 1].copy_from_slice(&[a, b]);
         }
 
-        let bit_index = self.state.step % 8;
-        let part = self.state.step / 8;
+        let bit_index = self.step % 8;
+        let part = self.step / 8;
         let current_row_part = (self.current_row[part as usize] >> bit_index) & 0b1;
 
         self.center_column[part as usize] |= current_row_part << bit_index;
 
-        self.state.step += 1;
+        self.step += 1;
         self.save_state()?;
 
         Ok(())
@@ -458,10 +710,7 @@ impl Validator {
     pub(crate) async fn run(&mut self) {
         loop {
             if let Err(e) = self.do_step().await {
-                error!(
-                    "Error during evolution step {step}, {e}",
-                    step = self.state.step
-                );
+                error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }
     }

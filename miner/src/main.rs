@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::simd::{LaneCount, Simd, SupportedLaneCount, u64x4};
+use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
 use std::slice;
 use std::time::{Duration, Instant};
 
@@ -11,16 +11,18 @@ use anyhow::Result;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
-use neuron::{AccountId, NeuronInfoLite, config, Subtensor, hotkey_location, load_key_account_id};
-use neuron::auth::{KeypairSignature, VerificationMessage, signature_matches};
+use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
+use neuron::{config, hotkey_location, load_key_account_id, AccountId, NeuronInfoLite, Subtensor};
 
 mod miner_config;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
+    // SAFETY: Every &_ is representable as &[u8], lifetimes match
     unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
 }
 
 fn as_u8_mut<T>(data: &mut [T]) -> &mut [u8] {
+    // SAFETY: Every &mut _ is representable as &mut [u8], lifetimes match
     unsafe { slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * size_of::<T>()) }
 }
 
@@ -39,7 +41,7 @@ impl Solver {
     }
 
     /// Solve a chunk of memory aligned to `Simd<u64, N>` in `size_of::<Simd<u64, N>>` chunks
-    /// SAFETY: Safe if `data` is aligned, otherwise the behavior is undefined
+    /// SAFETY: Safe if `data` is aligned, otherwise the behavior is undefined due to unaligned access
     unsafe fn solve_chunked<const N: usize>(&mut self, data: &mut [u8])
     where
         LaneCount<N>: SupportedLaneCount,
@@ -108,13 +110,23 @@ fn read<T>(stream: &mut TcpStream) -> T {
     let mut data = MaybeUninit::<T>::uninit();
 
     unsafe {
-        stream.read(slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, size_of::<AccountId>())).unwrap();
+        stream
+            .read(slice::from_raw_parts_mut(
+                data.as_mut_ptr() as *mut u8,
+                size_of::<AccountId>(),
+            ))
+            .unwrap();
 
         data.assume_init()
     }
 }
 
-fn info_matches(message: &VerificationMessage, neurons: &[NeuronInfoLite], account_id: &AccountId, miner_uid: u16) -> bool {
+fn info_matches(
+    message: &VerificationMessage,
+    neurons: &[NeuronInfoLite],
+    account_id: &AccountId,
+    miner_uid: u16,
+) -> bool {
     if message.netuid != *config::NETUID {
         return false;
     }
@@ -131,7 +143,7 @@ fn info_matches(message: &VerificationMessage, neurons: &[NeuronInfoLite], accou
         return false;
     }
 
-    return true
+    return true;
 }
 
 fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
@@ -157,15 +169,23 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
 
         solver.solve(&mut buffer, len);
 
-        match stream.write(&as_u8(&buffer)[..len]) {
-            Ok(len) => {
-                if len == 0 {
-                    error!("Validator {validator_uid}'s connection does not appear to be writable");
+        let mut written = 0;
+
+        while written < len {
+            match stream.write(&as_u8(&buffer)[written..len]) {
+                Ok(len) => {
+                    if len == 0 {
+                        error!(
+                            "Validator {validator_uid}'s connection does not appear to be writable"
+                        );
+                    } else {
+                        written += len;
+                    }
                 }
-            }
-            Err(error) => {
-                error!("Failed to write to validator {validator_uid}, {error}");
-                return;
+                Err(error) => {
+                    error!("Failed to write to validator {validator_uid}, {error}");
+                    return;
+                }
             }
         }
     }
@@ -183,18 +203,23 @@ struct Miner {
 
 impl Miner {
     async fn new() -> Self {
-        let hotkey_location = hotkey_location(config::WALLET_PATH.clone(), &*config::WALLET_NAME, &*config::HOTKEY_NAME);
+        let hotkey_location = hotkey_location(
+            config::WALLET_PATH.clone(),
+            &*config::WALLET_NAME,
+            &*config::HOTKEY_NAME,
+        );
         let account_id = load_key_account_id(&hotkey_location).unwrap();
 
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT)
-            .await
-            .unwrap();
+        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
         let current_block = subtensor.get_block_number().await.unwrap();
         let last_block_fetch = Instant::now();
         let neurons = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
-        let neuron = neurons.iter().find(|&info| info.hotkey == account_id).expect("Not registered");
+        let neuron = neurons
+            .iter()
+            .find(|&info| info.hotkey == account_id)
+            .expect("Not registered");
 
         let uid = neuron.uid.0;
 
@@ -216,7 +241,11 @@ impl Miner {
         if self.current_block - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
             self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
-            let neuron = self.neurons.iter().find(|&info| info.hotkey == self.account_id).expect("Not registered");
+            let neuron = self
+                .neurons
+                .iter()
+                .find(|&info| info.hotkey == self.account_id)
+                .expect("Not registered");
 
             self.last_metagraph_sync = self.current_block;
             self.uid = neuron.uid.0;
