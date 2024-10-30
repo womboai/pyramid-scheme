@@ -299,5 +299,12 @@ impl Miner {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .init();
+
+    info!("Starting miner v{}", env!("CARGO_PKG_VERSION"));
+
     Miner::new().await.run(*miner_config::PORT).await;
 }

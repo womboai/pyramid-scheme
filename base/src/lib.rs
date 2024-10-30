@@ -14,6 +14,7 @@ use subxt::ext::sp_core::{sr25519, Pair};
 use subxt::tx::PairSigner;
 use subxt::{Config, SubstrateConfig};
 use thiserror::Error;
+use tracing::info;
 
 pub mod auth;
 pub mod config;
@@ -88,6 +89,31 @@ compile_error!("Compilation is only allowed for 64-bit targets");
 
 #[cfg(not(target_endian = "little"))]
 compile_error!("Compilation is only allowed for little-endian based processors");
+
+#[derive(Copy, Debug, Clone)]
+pub enum AxonProtocol {
+    Tcp = 0,
+    Udp = 1,
+    Other = 4, // Not sure why this is 4, that's just the default
+}
+
+impl Default for AxonProtocol {
+    fn default() -> Self {
+        AxonProtocol::Other
+    }
+}
+
+impl Display for AxonProtocol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let display = match self {
+            AxonProtocol::Tcp => "TCP:0",
+            AxonProtocol::Udp => "UDP:1",
+            AxonProtocol::Other => "TCP/UDP:4"
+        };
+
+        f.write_str(display)
+    }
+}
 
 pub fn hotkey_location(
     mut wallet_path: PathBuf,
@@ -190,8 +216,10 @@ impl Subtensor {
         netuid: u16,
         ip: IpAddr,
         port: u16,
-        udp: bool,
+        protocol: AxonProtocol,
     ) -> Result<()> {
+        info!("serve_axon netuid={netuid} ip={ip} port={port} protocol={protocol}");
+
         let (ip, ip_type) = match ip {
             IpAddr::V4(v4) => (u32::from(v4) as u128, 4),
             IpAddr::V6(v6) => (u128::from(v6), 6),
@@ -203,7 +231,7 @@ impl Subtensor {
             ip,
             port,
             ip_type,
-            u8::from(udp),
+            protocol as u8,
             0,
             0,
         );

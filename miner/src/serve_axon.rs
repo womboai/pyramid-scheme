@@ -1,4 +1,4 @@
-use neuron::{config, hotkey_location, load_key_seed, signer_from_seed, Subtensor};
+use neuron::{AxonProtocol, config, hotkey_location, load_key_seed, signer_from_seed, Subtensor};
 use std::net::IpAddr;
 
 use clap::Parser;
@@ -33,7 +33,7 @@ async fn main() {
             *config::NETUID,
             args.ip,
             args.port.unwrap_or_else(|| *miner_config::PORT),
-            false,
+            AxonProtocol::Tcp,
         )
         .await
         .unwrap();
