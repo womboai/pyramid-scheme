@@ -1,8 +1,8 @@
 #![feature(portable_simd)]
 #![feature(random)]
-#![feature(sync_unsafe_cell)]
-#![feature(ptr_as_ref_unchecked)]
+#![feature(mpmc_channel)]
 
+use dotenv::dotenv;
 use tokio;
 use tracing::info;
 
@@ -14,6 +14,8 @@ async fn main() {
         .with_line_number(true)
         .with_thread_ids(true)
         .init();
+
+    dotenv().unwrap();
 
     info!("Starting validator v{}", env!("CARGO_PKG_VERSION"));
 

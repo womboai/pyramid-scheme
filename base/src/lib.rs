@@ -28,7 +28,7 @@ pub type Keypair = sr25519::Pair;
 pub type PublicKey = sr25519::Public;
 pub type Signer = PairSigner<SubtensorConfig, Keypair>;
 
-#[derive(Decode, Default, Clone, Debug)]
+#[derive(Decode, Default, Clone, Debug, Eq, PartialEq)]
 pub struct AxonInfo {
     pub block: u64,
     pub version: u32,

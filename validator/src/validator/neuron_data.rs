@@ -1,4 +1,5 @@
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
+use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::ops::{Add, AddAssign, Deref};
 
@@ -11,6 +12,9 @@ pub enum Score {
     Legitimate(u128),
     Cheater,
 }
+
+unsafe impl Sync for Score {}
+unsafe impl Send for Score {}
 
 impl Default for Score {
     fn default() -> Self {
@@ -38,6 +42,24 @@ impl Add<u128> for Score {
     }
 }
 
+pub struct UnsafeSendRef<'a, T>(&'a T, PhantomData<T>) where T : ?Sized;
+
+unsafe impl<'a, T> Send for UnsafeSendRef<'a, T> where T : ?Sized {}
+
+impl<'a, T> From<&'a T> for UnsafeSendRef<'a, T> where T : ?Sized {
+    fn from(value: &'a T) -> Self {
+        Self(value, PhantomData::default())
+    }
+}
+
+impl<'a, T> Deref for UnsafeSendRef<'a, T> where T : ?Sized {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
 impl AddAssign<u128> for Score {
     fn add_assign(&mut self, rhs: u128) {
         *self = *self + rhs
@@ -48,7 +70,7 @@ pub struct NeuronData {
     pub info: NeuronInfoLite,
 
     // Allow (non-shared) mutation in computation thread, not RefCell to avoid runtime borrow overhead
-    pub score: UnsafeCell<Score>,
+    pub score: Cell<Score>,
     pub connection: UnsafeCell<Option<TcpStream>>,
 }
 
@@ -56,36 +78,8 @@ pub trait UnsafeCellImmutableBorrow<T> {
     fn as_ref(&self) -> &T;
 }
 
-pub trait UnsafeCellImmutableCopy<T> {
-    fn inner(&self) -> T;
-}
-
 impl<T> UnsafeCellImmutableBorrow<T> for UnsafeCell<T> {
     fn as_ref(&self) -> &T {
         unsafe { &*self.get() }
-    }
-}
-
-impl<T> UnsafeCellImmutableCopy<T> for UnsafeCell<T> where T : Copy {
-    fn inner(&self) -> T {
-        *self.as_ref()
-    }
-}
-
-pub struct SendPtr<T>(*mut T);
-
-unsafe impl<T> Send for SendPtr<T> {}
-
-impl<T> From<*mut T> for SendPtr<T> {
-    fn from(value: *mut T) -> Self {
-        SendPtr(value)
-    }
-}
-
-impl<T> Deref for SendPtr<T> {
-    type Target = *mut T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }

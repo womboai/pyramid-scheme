@@ -20,6 +20,8 @@ tracing = { workspace = true }
 
 threadpool = { workspace = true }
 
+dotenv = { workspace = true }
+
 clap = { version = "4.5.20", features = ["derive"] }
 
 rule-30-solver-neuron = { path = "../base" }

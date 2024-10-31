@@ -9,6 +9,8 @@ pub struct EventFuture<T> {
     data: MaybeUninit<T>,
 }
 
+unsafe impl<T> Send for EventFuture<T> {}
+
 impl<T> Default for EventFuture<T> {
     fn default() -> Self {
         Self {

@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::ops::{Deref, DerefMut, Range};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::{fs, io::Result};
 
@@ -22,19 +22,22 @@ pub struct MemoryMappedFile {
 }
 
 impl MemoryMappedFile {
-    fn new(file: File, path: impl AsRef<Path>) -> Self {
+    fn new(file: File, path: impl AsRef<Path>) -> Result<Self> {
         // SAFETY: This would typically not be safe as this is technically a self-referential
         //  struct. Mmap is using a reference of `&file` without a lifetime.
         //  However, this works as mmap uses the file descriptor internally,
         //  so even if {File} is moved, the descriptor remains the same,
         //  and the file descriptor is closed at the same time the mmap is closed.
-        let mmap = unsafe { MmapOptions::new().map_mut(&file) }.unwrap();
 
-        Self {
-            mmap,
-            file,
-            path: path.as_ref().to_path_buf(),
-        }
+        let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+
+        Ok(
+            Self {
+                mmap,
+                file,
+                path: path.as_ref().to_path_buf(),
+            }
+        )
     }
 }
 
@@ -48,7 +51,7 @@ impl MemoryMapped for MemoryMappedFile {
 
         file.set_len(capacity)?;
 
-        Ok(Self::new(file, path))
+        Self::new(file, path)
     }
 
     fn flush(&self) -> Result<()> {
@@ -81,12 +84,6 @@ impl DerefMut for MemoryMappedFile {
 pub struct MemoryMappedStorage {
     swap_file: MemoryMappedFile,
     storage_path: PathBuf,
-}
-
-impl MemoryMappedStorage {
-    pub fn map_original(&self, range: Range<u64>) -> MemoryMappedFile {
-        todo!()
-    }
 }
 
 impl MemoryMapped for MemoryMappedStorage {

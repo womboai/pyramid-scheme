@@ -4,10 +4,11 @@ use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
-use std::slice;
+use std::{io, slice};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use dotenv::dotenv;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
@@ -66,9 +67,12 @@ impl Solver {
         }
     }
 
-    fn solve(&mut self, data: &mut [AlignedChunk], read_len: usize) {
-        let len = data.len();
-        let data_u8 = &mut as_u8_mut(data)[..read_len];
+    fn solve(&mut self, data: &mut [AlignedChunk], offset: usize, read_len: usize) {
+        if read_len == 0 {
+            return;
+        }
+
+        let data_u8 = &mut as_u8_mut(data)[offset..offset + read_len];
 
         if data_u8.len() <= 8 {
             let mut x = 0u64;
@@ -89,35 +93,34 @@ impl Solver {
                 self.solve_chunked::<1>(data_u8);
             }
 
-            self.solve(&mut data[1..], read_len % (8));
+            self.solve(data, offset + read_len - read_len % 8, read_len % 8);
         } else if data_u8.len() < 8 * 4 {
             unsafe {
                 self.solve_chunked::<2>(data_u8);
             }
 
-            self.solve(&mut data[len % 2..], read_len % (8 * 2));
+            self.solve(data, offset + read_len - read_len % (8 * 2), read_len % (8 * 2));
         } else {
             unsafe {
                 self.solve_chunked::<4>(data_u8);
             }
 
-            self.solve(&mut data[len % 4..], read_len % (8 * 4));
+            self.solve(data, offset + read_len - read_len % (8 * 4), read_len % (8 * 4));
         }
     }
 }
 
-fn read<T>(stream: &mut TcpStream) -> T {
+fn read<T>(stream: &mut TcpStream) -> io::Result<T> {
     let mut data = MaybeUninit::<T>::uninit();
 
     unsafe {
         stream
             .read(slice::from_raw_parts_mut(
                 data.as_mut_ptr() as *mut u8,
-                size_of::<AccountId>(),
-            ))
-            .unwrap();
+                size_of::<T>(),
+            ))?;
 
-        data.assume_init()
+        Ok(data.assume_init())
     }
 }
 
@@ -154,6 +157,8 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
         buffer.set_len(buffer.capacity());
     }
 
+    let mut total_solved = 0;
+
     loop {
         let len = match stream.read(as_u8_mut(&mut buffer)) {
             Ok(len) => len,
@@ -167,7 +172,7 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
             break;
         }
 
-        solver.solve(&mut buffer, len);
+        solver.solve(&mut buffer, 0, len);
 
         let mut written = 0;
 
@@ -188,7 +193,11 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
                 }
             }
         }
+
+        total_solved += written;
     }
+
+    info!("Solved {total_solved} bytes for validator {validator_uid}")
 }
 
 struct Miner {
@@ -273,7 +282,13 @@ impl Miner {
             if let Ok((mut stream, address)) = listener.accept() {
                 info!("Validator {address} has connected");
 
-                let message = read::<VerificationMessage>(&mut stream);
+                let message = match read::<VerificationMessage>(&mut stream) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        info!("Failed to read signed message from {address}, {error}");
+                        continue;
+                    }
+                };
 
                 if !info_matches(&message, &self.neurons, &self.account_id, self.uid) {
                     info!("{address} sent a signed message with incorrect information");
@@ -281,7 +296,13 @@ impl Miner {
                 }
 
                 let signature_matches = {
-                    let signature = read::<KeypairSignature>(&mut stream);
+                    let signature = match read::<KeypairSignature>(&mut stream) {
+                        Ok(signature) => signature,
+                        Err(error) => {
+                            info!("Failed to read signature from {address}, {error}");
+                            continue;
+                        }
+                    };
 
                     signature_matches(&signature, &message)
                 };
@@ -303,6 +324,8 @@ async fn main() {
         .with_line_number(true)
         .with_thread_ids(true)
         .init();
+
+    dotenv().unwrap();
 
     info!("Starting miner v{}", env!("CARGO_PKG_VERSION"));
 

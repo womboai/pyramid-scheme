@@ -21,6 +21,8 @@ threadpool = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+dotenv = { workspace = true }
+
 memmap2 = "0.9.5"
 
 rule-30-solver-neuron = { path = "../base" }
