@@ -7743,6 +7743,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dotenv",
+ "num-bigint",
  "rule-30-solver-neuron",
  "threadpool",
  "tokio",

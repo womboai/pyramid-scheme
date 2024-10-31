@@ -331,3 +331,35 @@ async fn main() {
 
     Miner::new().await.run(*miner_config::PORT).await;
 }
+
+#[cfg(test)]
+mod test {
+    use std::simd::u64x4;
+    use num_bigint::{BigInt, Sign};
+    use crate::{AlignedChunk, as_u8, Solver};
+
+    const STEPS: u64 = 1_000_000;
+
+    #[test]
+    fn ensure_accurate_solver() {
+        let mut solver = Solver::new();
+        let bits = (STEPS * 2 + 1) as usize;
+        let mut expected = BigInt::new(Sign::Plus, vec![1]);
+        let vec_size = bits.div_ceil(8).div_ceil(size_of::<AlignedChunk>());
+
+        let mut result = Vec::with_capacity(vec_size);
+        result.resize_with(vec_size, || AlignedChunk(u64x4::splat(0)));
+        result[0] = AlignedChunk(u64x4::from_array([1, 0, 0, 0]));
+
+        for i in 0..STEPS - 1 {
+            let byte_count = (i * 2 + 3).div_ceil(8);
+
+            solver.solve(&mut result, 0, byte_count as usize);
+
+            expected ^= expected.clone() << 1 | expected.clone() << 2;
+
+            assert_eq!(&expected.to_bytes_le().1, &as_u8(&result)[..byte_count as usize]);
+        }
+    }
+}
+

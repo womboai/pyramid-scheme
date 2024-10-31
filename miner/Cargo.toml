@@ -25,3 +25,6 @@ dotenv = { workspace = true }
 clap = { version = "4.5.20", features = ["derive"] }
 
 rule-30-solver-neuron = { path = "../base" }
+
+[dev-dependencies]
+num-bigint = "0.4.6"
