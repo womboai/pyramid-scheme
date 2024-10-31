@@ -2,7 +2,7 @@
 
 # Pyramid Scheme: Unlocking Emergent Intelligence Through Cellular Automata
 
-![Rule 30 Progression](cover.png)
+![Rule 30 Progression](cover.gif)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://opensource.org/licenses/MIT)
 
 ---
