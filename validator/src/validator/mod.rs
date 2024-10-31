@@ -409,6 +409,7 @@ impl Validator {
         score: UnsafeSendRef<Cell<Score>>,
         start: u64,
         end: u64,
+        uid: u16,
         end_trigger: &mut EventFuture<(u64, bool)>,
     ) {
         let connection = connection_ref.as_mut().unwrap();
@@ -513,13 +514,19 @@ impl Validator {
                         }
                     };
 
-                    if should_validate && !Self::verify_result(&current_row[range.start..range.start + len], &buffer[..len]) {
-                        score.set(Score::Cheater);
-                        *connection_ref = None;
+                    if should_validate {
+                        info!("Verifying results of {uid}");
 
-                        end_trigger.complete((0, false));
+                        if !Self::verify_result(&current_row[range.start..range.start + len], &buffer[..len]) {
+                            info!("{uid} marked as cheater");
 
-                        return;
+                            score.set(Score::Cheater);
+                            *connection_ref = None;
+
+                            end_trigger.complete((0, false));
+
+                            return;
+                        }
                     }
 
                     (&mut current_row[range]).copy_from_slice(&buffer[..len]);
@@ -672,7 +679,7 @@ impl Validator {
                     let event = &mut *completion_events.last().unwrap().2.get();
 
                     scope.spawn(move || {
-                        Self::handle_connection(row, connection, score, start, end, event)
+                        Self::handle_connection(row, connection, score, start, end, uid, event)
                     });
                 }
             }
@@ -715,7 +722,7 @@ impl Validator {
 
                                 let mut event = EventFuture::new();
 
-                                Validator::handle_connection(row, connection, score, range.start + written, range.end, &mut event);
+                                Validator::handle_connection(row, connection, score, range.start + written, range.end, finished_uid, &mut event);
 
                                 event.await;
 
@@ -740,7 +747,7 @@ impl Validator {
 
                             let mut event = EventFuture::new();
 
-                            Validator::handle_connection(row, connection, score, unfinished_range.start, unfinished_range.end, &mut event);
+                            Validator::handle_connection(row, connection, score, unfinished_range.start, unfinished_range.end, uid, &mut event);
 
                             event.await;
                         }
