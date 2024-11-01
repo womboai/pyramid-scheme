@@ -106,19 +106,19 @@ And then run either the miner or validator binary
 ### Running a miner
 ```bash
 # Without PM2:
-cargo run --bin miner
+cargo run --release --bin miner
 
 # With PM2
-pm2 start --name rule-30-miner --interpreter none -- cargo run --bin miner
+pm2 start cargo --name rule-30-miner --interpreter none -- run --release  --bin miner
 ```
 
 ### Running a validator
 ```bash
 # Without PM2:
-cargo run --bin validator
+cargo run --release --bin validator
 
 # With PM2
-pm2 start --name rule-30-validator --interpreter none -- cargo run --bin validator
+pm2 start cargo --name rule-30-validator --interpreter none -- run --release --bin validator
 ```
 
 ## Roadmap
