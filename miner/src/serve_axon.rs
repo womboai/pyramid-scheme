@@ -2,6 +2,7 @@ use neuron::{AxonProtocol, config, hotkey_location, load_key_seed, signer_from_s
 use std::net::IpAddr;
 
 use clap::Parser;
+use dotenv::dotenv;
 
 #[derive(Parser)]
 struct Cli {
@@ -11,6 +12,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    dotenv().unwrap();
+
     let args: Cli = Cli::parse();
 
     let hotkey_location = hotkey_location(

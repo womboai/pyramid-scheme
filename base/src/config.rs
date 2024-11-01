@@ -1,4 +1,5 @@
 use std::borrow::ToOwned;
+use std::convert::Into;
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -20,8 +21,8 @@ pub static NETUID: LazyLock<u16> = LazyLock::new(|| {
         .unwrap_or(36)
 });
 
-pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap());
-pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap());
+pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap_or_else(|_| "default".into()));
+pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap_or_else(|_| "default".into()));
 
 pub static WALLET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("WALLET_PATH")
