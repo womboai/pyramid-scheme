@@ -21,8 +21,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
 use neuron::{config, hotkey_location, load_key_account_id, AccountId, NeuronInfoLite, Subtensor};
 
-mod miner_config;
-
 fn as_u8<T>(data: &[T]) -> &[u8] {
     // SAFETY: Every &_ is representable as &[u8], lifetimes match
     unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
