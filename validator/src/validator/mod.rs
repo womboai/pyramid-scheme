@@ -35,6 +35,10 @@ const VERSION_KEY: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
 const VALIDATION_CHANCE: f32 = 0.05;
 
+pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
+pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
+pub(crate) const CENTER_COLUMN_FILE: &'static str = "state/center_column.bin";
+
 struct CurrentRow(Arc<UnsafeCell<MemoryMappedStorage>>);
 
 impl CurrentRow {
@@ -115,7 +119,7 @@ pub struct Validator {
     signer: Signer,
     subtensor: Subtensor,
     neurons: Vec<NeuronData>,
-    uid: u16,
+    pub(crate) uid: u16,
 
     current_row: CurrentRow,
     center_column: MemoryMappedFile,
@@ -187,13 +191,13 @@ impl Validator {
         fs::create_dir_all("state").unwrap();
 
         let mut current_row = CurrentRow::open(
-            "state/current_row.bin",
+            CURRENT_ROW_FILE,
             Self::current_row_file_size(state.step),
         )
             .unwrap();
 
         let mut center_column = MemoryMappedFile::open(
-            "state/center_column.bin",
+            CENTER_COLUMN_FILE,
             Self::center_column_file_size(state.step),
         )
             .unwrap();
@@ -237,12 +241,8 @@ impl Validator {
         }
     }
 
-    fn state_path() -> PathBuf {
-        PathBuf::from("state/data.json")
-    }
-
     fn save_state(&self) -> Result<()> {
-        let path = Self::state_path();
+        let path = PathBuf::from(STATE_DATA_FILE);
 
         self.center_column.flush()?;
         self.current_row.flush()?;
@@ -273,7 +273,7 @@ impl Validator {
     fn load_state(hotkeys: impl Iterator<Item=AccountId>) -> Result<ValidatorState> {
         info!("Loading state");
 
-        let path = Self::state_path();
+        let path = PathBuf::from(STATE_DATA_FILE);
 
         if !path.exists() {
             return Ok(ValidatorState::for_hotkeys(hotkeys));
@@ -803,6 +803,10 @@ impl Validator {
                 error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }
+    }
+
+    pub(crate) fn account_id(&self) -> &AccountId {
+        self.signer.account_id()
     }
 
     fn normalize_pair(a: u8, b: u8) -> (u8, u8) {

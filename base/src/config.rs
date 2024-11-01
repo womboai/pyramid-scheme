@@ -29,6 +29,12 @@ pub static WALLET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
         .unwrap_or_else(|_| default_wallet_path().expect("No home directory nor WALLET_PATH set"))
 });
 
+pub static PORT: LazyLock<u16> = LazyLock::new(|| {
+    env::var("PORT")
+        .map(|port| port.parse().unwrap())
+        .unwrap_or(8091)
+});
+
 fn default_wallet_path() -> Option<PathBuf> {
     if let Some(mut dir) = dirs::home_dir() {
         dir.push(".bittensor");

@@ -22,6 +22,12 @@ threadpool = { workspace = true }
 
 dotenv = { workspace = true }
 
+opentelemetry = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry-stdout = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+
 clap = { version = "4.5.20", features = ["derive"] }
 
 rule-30-solver-neuron = { path = "../base" }

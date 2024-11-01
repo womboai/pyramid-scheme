@@ -32,7 +32,7 @@ async fn main() {
             &signer,
             *config::NETUID,
             args.ip,
-            args.port.unwrap_or_else(|| *miner_config::PORT),
+            args.port.unwrap_or_else(|| *config::PORT),
             AxonProtocol::Tcp,
         )
         .await
