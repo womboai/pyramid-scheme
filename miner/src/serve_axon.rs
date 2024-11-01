@@ -3,8 +3,6 @@ use std::net::IpAddr;
 
 use clap::Parser;
 
-mod miner_config;
-
 #[derive(Parser)]
 struct Cli {
     ip: IpAddr,
