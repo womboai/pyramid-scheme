@@ -12,7 +12,7 @@ use opentelemetry_sdk::logs::LoggerProvider;
 use opentelemetry_sdk::Resource;
 use tokio;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -37,7 +37,9 @@ async fn api_main() {
 
 #[tokio::main]
 async fn main() {
-    dotenv().unwrap();
+    if let Err(e) = dotenv() {
+        warn!("Could not load .env: {e}");
+    }
 
     let mut validator = validator::Validator::new().await;
 

@@ -3,6 +3,7 @@ use std::net::IpAddr;
 
 use clap::Parser;
 use dotenv::dotenv;
+use tracing::warn;
 
 #[derive(Parser)]
 struct Cli {
@@ -12,7 +13,9 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    dotenv().unwrap();
+    if let Err(e) = dotenv() {
+        warn!("Could not load .env: {e}");
+    }
 
     let args: Cli = Cli::parse();
 

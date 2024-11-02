@@ -14,7 +14,7 @@ use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_sdk::logs::LoggerProvider;
 use opentelemetry_sdk::Resource;
 use threadpool::ThreadPool;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -302,7 +302,9 @@ impl Miner {
 
 #[tokio::main]
 async fn main() {
-    dotenv().unwrap();
+    if let Err(e) = dotenv() {
+        warn!("Could not load .env: {e}");
+    }
 
     let mut miner = Miner::new().await;
 
