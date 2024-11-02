@@ -32,7 +32,7 @@ impl AsRef<[u8]> for VerificationMessage {
 pub fn signature_matches(signature: &KeypairSignature, message: &VerificationMessage) -> bool {
     sr25519::Pair::verify(
         signature,
-        &message,
+        message,
         &sr25519::Public::from_raw(message.validator.account_id.0),
     )
 }

@@ -22,6 +22,8 @@ threadpool = { workspace = true }
 
 dotenv = { workspace = true }
 
+thiserror = { workspace = true }
+
 opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-stdout = { workspace = true }

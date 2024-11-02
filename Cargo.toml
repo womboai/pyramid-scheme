@@ -20,6 +20,8 @@ serde_json = "1.0"
 
 dotenv = "0.15.0"
 
+thiserror = "1.0.65"
+
 opentelemetry = "0.26.0"
 opentelemetry-appender-tracing = "0.26.0"
 opentelemetry-stdout = "0.26.0"

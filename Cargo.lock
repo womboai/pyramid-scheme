@@ -8146,6 +8146,7 @@ dependencies = [
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "rule-30-solver-neuron",
+ "thiserror",
  "threadpool",
  "tokio",
  "tracing",

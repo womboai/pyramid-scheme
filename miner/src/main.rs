@@ -20,6 +20,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
 use neuron::{config, hotkey_location, load_key_account_id, AccountId, NeuronInfoLite, Subtensor};
+use crate::signature_checking::info_matches;
+
+mod signature_checking;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     // SAFETY: Every &_ is representable as &[u8], lifetimes match
@@ -126,31 +129,6 @@ fn read<T>(stream: &mut TcpStream) -> io::Result<T> {
 
         Ok(data.assume_init())
     }
-}
-
-fn info_matches(
-    message: &VerificationMessage,
-    neurons: &[NeuronInfoLite],
-    account_id: &AccountId,
-    miner_uid: u16,
-) -> bool {
-    if message.netuid != *config::NETUID {
-        return false;
-    }
-
-    if &message.miner.account_id != account_id {
-        return false;
-    }
-
-    if message.miner.uid != miner_uid {
-        return false;
-    }
-
-    if neurons[message.validator.uid as usize].hotkey != message.validator.account_id {
-        return false;
-    }
-
-    return true;
 }
 
 fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
@@ -294,8 +272,8 @@ impl Miner {
                     }
                 };
 
-                if !info_matches(&message, &self.neurons, &self.account_id, self.uid) {
-                    info!("{address} sent a signed message with incorrect information");
+                if let Err(e) = info_matches(&message, &self.neurons, &self.account_id, self.uid) {
+                    info!("{address} sent a signed message with incorrect information, {e}");
                     return;
                 }
 

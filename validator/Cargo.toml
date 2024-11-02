@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 
 dotenv = { workspace = true }
 
+thiserror = { workspace = true }
+
 opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-stdout = { workspace = true }
@@ -34,7 +36,5 @@ axum = "0.7.7"
 axum-extra = "0.9.4"
 axum-range = "0.4.0"
 axum-debug-macros = "0.1.0"
-
-thiserror = "1.0.65"
 
 rule-30-solver-neuron = { path = "../base" }
