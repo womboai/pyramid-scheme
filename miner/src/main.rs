@@ -274,7 +274,7 @@ impl Miner {
 
                 if let Err(e) = info_matches(&message, &self.neurons, &self.account_id, self.uid) {
                     info!("{address} sent a signed message with incorrect information, {e}");
-                    return;
+                    continue;
                 }
 
                 let signature_matches = {
@@ -291,7 +291,7 @@ impl Miner {
 
                 if !signature_matches {
                     info!("{address} sent a signed message with an incorrect signature");
-                    return;
+                    continue;
                 }
 
                 pool.execute(move || handle_connection(stream, message.validator.uid));
