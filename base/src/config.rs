@@ -1,6 +1,7 @@
 use std::borrow::ToOwned;
 use std::convert::Into;
 use std::env;
+use std::iter::Iterator;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -14,6 +15,18 @@ pub static CHAIN_ENDPOINT: LazyLock<String> = LazyLock::new(|| {
     env::var("CHAIN_ENDPOINT").unwrap_or("wss://entrypoint-finney.opentensor.ai:443".to_owned())
 });
 
+pub static INSECURE_CHAIN_SCHEME: LazyLock<bool> = LazyLock::new(|| {
+    env::var("INSECURE_CHAIN_SCHEME")
+        .map(|value| {
+            value
+                .chars()
+                .next()
+                .map(|c| c == 't' || c == 'T' || c == '1')
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+});
+
 pub static NETUID: LazyLock<u16> = LazyLock::new(|| {
     env::var("NETUID")
         .as_ref()
@@ -21,8 +34,10 @@ pub static NETUID: LazyLock<u16> = LazyLock::new(|| {
         .unwrap_or(36)
 });
 
-pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap_or_else(|_| "default".into()));
-pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap_or_else(|_| "default".into()));
+pub static WALLET_NAME: LazyLock<String> =
+    LazyLock::new(|| env::var("WALLET_NAME").unwrap_or_else(|_| "default".into()));
+pub static HOTKEY_NAME: LazyLock<String> =
+    LazyLock::new(|| env::var("HOTKEY_NAME").unwrap_or_else(|_| "default".into()));
 
 pub static WALLET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("WALLET_PATH")

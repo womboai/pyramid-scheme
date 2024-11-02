@@ -168,7 +168,11 @@ pub fn signer_from_seed(seed: &[u8]) -> Result<Signer> {
 impl Subtensor {
     pub async fn new(url: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            client: OnlineClient::from_url(url).await?,
+            client: if *config::INSECURE_CHAIN_SCHEME {
+                OnlineClient::from_insecure_url(url).await?
+            } else {
+                OnlineClient::from_url(url).await?
+            },
         })
     }
 
