@@ -98,7 +98,7 @@ WALLET_PATH=~/.bittensor/wallets
 And then serve your Axon IP/port to chain:
 ```bash
 # IP required, port optional(would use PORT otherwise)
-cargo run --bin serve-axon 1.2.3.4 8091
+cargo run --release --bin serve-axon 1.2.3.4 8091
 ```
 
 And then run either the miner or validator binary
