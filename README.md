@@ -82,49 +82,43 @@ To solve the fundamental questions posed by Wolfram, our subnet coordinates vali
 **Validators:** distribute computational tasks and verify results. Since Rule 30 is deterministic, validation is straightforward - each computation has exactly one correct answer. Validators check accuracy, measure response time, and reward miners accordingly.
 
 ## Running a miner or validator
-To run either a miner or validator, export the following environment variables as needed(all are optional):
+To run either a miner or validator, create a .env file with the following content, and edit as needed(all are optional):
 ```bash
-export CHAIN_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443 
-export NETUID=36
-export EPOCH_LENGTH=100 # Interval length to sync metagraph or set weights
+CHAIN_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+NETUID=36
+EPOCH_LENGTH=100 # Interval length to sync metagraph or set weights
+
+PORT=8091
+
+WALLET_NAME=default
+HOTKEY_NAME=default
+WALLET_PATH=~/.bittensor/wallets
 ```
 
-### Running a miner
-Then, to run a miner, export the extra PORT environment variable along with wallet info as needed, and serve the port to chain:
+And then serve your Axon IP/port to chain:
 ```bash
-export PORT=8091
-export WALLET_NAME=default
-export HOTKEY_NAME=default
-export WALLET_PATH=~/.bittensor/wallets
-
 # IP required, port optional(would use PORT otherwise)
 cargo run --bin serve-axon 1.2.3.4 8091
 ```
 
-and then start your miner:
+And then run either the miner or validator binary
+
+### Running a miner
 ```bash
 # Without PM2:
-cargo run --bin miner
+cargo run --release --bin miner
 
 # With PM2
-pm2 start --name rule-30-miner --interpreter none -- cargo run --bin miner
+pm2 start cargo --name rule-30-miner --interpreter none -- run --release  --bin miner
 ```
 
 ### Running a validator
-Then, to run a validator, export the wallet info as needed:
-```bash
-export WALLET_NAME=default
-export HOTKEY_NAME=default
-export WALLET_PATH=~/.bittensor/wallets
-```
-
-and then start your validator:
 ```bash
 # Without PM2:
-cargo run --bin validator
+cargo run --release --bin validator
 
 # With PM2
-pm2 start --name rule-30-validator --interpreter none -- cargo run --bin validator
+pm2 start cargo --name rule-30-validator --interpreter none -- run --release --bin validator
 ```
 
 ## Roadmap

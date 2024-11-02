@@ -1,4 +1,5 @@
 use std::borrow::ToOwned;
+use std::convert::Into;
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -20,13 +21,19 @@ pub static NETUID: LazyLock<u16> = LazyLock::new(|| {
         .unwrap_or(36)
 });
 
-pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap());
-pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap());
+pub static WALLET_NAME: LazyLock<String> = LazyLock::new(|| env::var("WALLET_NAME").unwrap_or_else(|_| "default".into()));
+pub static HOTKEY_NAME: LazyLock<String> = LazyLock::new(|| env::var("HOTKEY_NAME").unwrap_or_else(|_| "default".into()));
 
 pub static WALLET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("WALLET_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| default_wallet_path().expect("No home directory nor WALLET_PATH set"))
+});
+
+pub static PORT: LazyLock<u16> = LazyLock::new(|| {
+    env::var("PORT")
+        .map(|port| port.parse().unwrap())
+        .unwrap_or(8091)
 });
 
 fn default_wallet_path() -> Option<PathBuf> {

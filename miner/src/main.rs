@@ -9,13 +9,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dotenv::dotenv;
+use opentelemetry::{KeyValue, Value};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_sdk::logs::LoggerProvider;
+use opentelemetry_sdk::Resource;
 use threadpool::ThreadPool;
 use tracing::{error, info};
-
+use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
 use neuron::{config, hotkey_location, load_key_account_id, AccountId, NeuronInfoLite, Subtensor};
-
-mod miner_config;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     // SAFETY: Every &_ is representable as &[u8], lifetimes match
@@ -320,14 +324,70 @@ impl Miner {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_line_number(true)
-        .with_thread_ids(true)
-        .init();
-
     dotenv().unwrap();
+
+    let mut miner = Miner::new().await;
+
+    let exporter_builder = opentelemetry_otlp::new_exporter().tonic();
+
+    let provider: LoggerProvider = LoggerProvider::builder()
+        .with_resource(Resource::new(vec![
+            KeyValue::new("service.name", "pyramid-scheme-miner"),
+            KeyValue::new("neuron.type", "validator"),
+            KeyValue::new("neuron.uid", Value::I64(miner.uid as i64)),
+            KeyValue::new("neuron.hotkey", miner.account_id.to_string()),
+        ]))
+        .with_batch_exporter(exporter_builder.build_log_exporter().unwrap(), opentelemetry_sdk::runtime::Tokio)
+        .build();
+
+    let otel = OpenTelemetryTracingBridge::new(&provider);
+
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    let fmt = fmt::layer()
+        .with_line_number(true)
+        .with_thread_ids(true);
+
+    tracing_subscriber::registry()
+        .with(fmt)
+        .with(otel)
+        .with(filter_layer)
+        .init();
 
     info!("Starting miner v{}", env!("CARGO_PKG_VERSION"));
 
-    Miner::new().await.run(*miner_config::PORT).await;
+    miner.run(*config::PORT).await;
+}
+
+#[cfg(test)]
+mod test {
+    use std::simd::u64x4;
+    use num_bigint::{BigInt, Sign};
+    use crate::{AlignedChunk, as_u8, Solver};
+
+    const STEPS: u64 = 1_000_000;
+
+    #[test]
+    fn ensure_accurate_solver() {
+        let mut solver = Solver::new();
+        let bits = (STEPS * 2 + 1) as usize;
+        let mut expected = BigInt::new(Sign::Plus, vec![1]);
+        let vec_size = bits.div_ceil(8).div_ceil(size_of::<AlignedChunk>());
+
+        let mut result = Vec::with_capacity(vec_size);
+        result.resize_with(vec_size, || AlignedChunk(u64x4::splat(0)));
+        result[0] = AlignedChunk(u64x4::from_array([1, 0, 0, 0]));
+
+        for i in 0..STEPS - 1 {
+            let byte_count = (i * 2 + 3).div_ceil(8);
+
+            solver.solve(&mut result, 0, byte_count as usize);
+
+            expected ^= expected.clone() << 1 | expected.clone() << 2;
+
+            assert_eq!(&expected.to_bytes_le().1, &as_u8(&result)[..byte_count as usize]);
+        }
+    }
 }

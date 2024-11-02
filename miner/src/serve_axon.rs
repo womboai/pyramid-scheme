@@ -2,8 +2,7 @@ use neuron::{AxonProtocol, config, hotkey_location, load_key_seed, signer_from_s
 use std::net::IpAddr;
 
 use clap::Parser;
-
-mod miner_config;
+use dotenv::dotenv;
 
 #[derive(Parser)]
 struct Cli {
@@ -13,6 +12,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    dotenv().unwrap();
+
     let args: Cli = Cli::parse();
 
     let hotkey_location = hotkey_location(
@@ -32,7 +33,7 @@ async fn main() {
             &signer,
             *config::NETUID,
             args.ip,
-            args.port.unwrap_or_else(|| *miner_config::PORT),
+            args.port.unwrap_or_else(|| *config::PORT),
             AxonProtocol::Tcp,
         )
         .await
