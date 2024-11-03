@@ -659,7 +659,7 @@ impl Validator {
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        let mut connection_count = connections.len() as u64;
+        let connection_count = connections.len() as u64;
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
 
@@ -791,7 +791,7 @@ impl Validator {
             }
 
             let [a, b] = self.current_row[end..end + 1] else {
-                unreachable!()
+                break
             };
 
             let (a, b) = Self::normalize_pair(a, b);
