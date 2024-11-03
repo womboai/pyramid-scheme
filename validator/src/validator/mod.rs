@@ -412,6 +412,11 @@ impl Validator {
         uid: u16,
         end_trigger: &mut EventFuture<(u64, bool)>,
     ) {
+        if start == end {
+            end_trigger.complete((0, true));
+            return;
+        }
+
         let connection = connection_ref.as_mut().unwrap();
 
         let buffer_size = min(end - start, 8 * 4 * 256);
