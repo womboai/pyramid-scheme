@@ -785,7 +785,7 @@ impl Validator {
         })).join_all().await;
 
         if connection_count != 1 {
-            for i in 1..connection_count {
+            for i in 0..connection_count {
                 let end = ((i + 1) * chunk_size) as usize;
 
                 let [a, b] = self.current_row[end..end + 1] else {
