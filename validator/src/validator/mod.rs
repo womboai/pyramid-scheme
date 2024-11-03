@@ -529,7 +529,7 @@ impl Validator {
                         }
                     }
 
-                    (&mut current_row[range]).copy_from_slice(&buffer[..len]);
+                    (&mut current_row[range.start..range.start + len]).copy_from_slice(&buffer[..len]);
                     read += len;
                 }
 
