@@ -678,8 +678,7 @@ impl Validator {
                     let end = min((index as u64 + 1) * chunk_size, byte_count);
 
                     if start == end {
-                        connection_count = index as u64;
-                        break
+                        break;
                     }
 
                     let event = UnsafeCell::new(EventFuture::<(u64, bool)>::new());
@@ -784,18 +783,20 @@ impl Validator {
             }
         })).join_all().await;
 
-        if connection_count != 1 {
-            for i in 0..connection_count {
-                let end = ((i + 1) * chunk_size) as usize;
+        for i in 0..connection_count - 1 {
+            let end = ((i + 1) * chunk_size) as usize;
 
-                let [a, b] = self.current_row[end..end + 1] else {
-                    unreachable!()
-                };
-
-                let (a, b) = Self::normalize_pair(a, b);
-
-                self.current_row[end..end + 1].copy_from_slice(&[a, b]);
+            if end >= byte_count as usize {
+                break
             }
+
+            let [a, b] = self.current_row[end..end + 1] else {
+                unreachable!()
+            };
+
+            let (a, b) = Self::normalize_pair(a, b);
+
+            self.current_row[end..end + 1].copy_from_slice(&[a, b]);
         }
 
         let bit_index = self.step % 8;
