@@ -659,7 +659,7 @@ impl Validator {
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        let connection_count = connections.len() as u64;
+        let mut connection_count = connections.len() as u64;
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
 
@@ -678,6 +678,7 @@ impl Validator {
                     let end = min((index as u64 + 1) * chunk_size, byte_count);
 
                     if start == end {
+                        connection_count = index as u64;
                         break
                     }
 
@@ -783,21 +784,18 @@ impl Validator {
             }
         })).join_all().await;
 
-        for i in 1..connection_count - 1 {
-            let start = (i * chunk_size) as usize;
-            let end = min((i + 1) * chunk_size, byte_count) as usize;
+        if connection_count != 1 {
+            for i in 1..connection_count {
+                let end = ((i + 1) * chunk_size) as usize;
 
-            if start >= end {
-                break
+                let [a, b] = self.current_row[end..end + 1] else {
+                    unreachable!()
+                };
+
+                let (a, b) = Self::normalize_pair(a, b);
+
+                self.current_row[end..end + 1].copy_from_slice(&[a, b]);
             }
-
-            let [a, b] = self.current_row[end..end + 1] else {
-                unreachable!()
-            };
-
-            let (a, b) = Self::normalize_pair(a, b);
-
-            self.current_row[end..end + 1].copy_from_slice(&[a, b]);
         }
 
         let bit_index = self.step % 8;
