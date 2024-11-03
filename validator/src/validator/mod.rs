@@ -412,11 +412,6 @@ impl Validator {
         uid: u16,
         end_trigger: &mut EventFuture<(u64, bool)>,
     ) {
-        if start == end {
-            end_trigger.complete((0, true));
-            return;
-        }
-
         let connection = connection_ref.as_mut().unwrap();
 
         let buffer_size = min(end - start, 8 * 4 * 256);
@@ -467,7 +462,7 @@ impl Validator {
                         len
                     }
                     Err(error) => {
-                        error!("Error occurred writing to miner: {error}");
+                        warn!("Error occurred writing to miner: {error}");
 
                         *connection_ref = None;
                         score.set(score.get() + added as u128);
@@ -509,7 +504,7 @@ impl Validator {
                             len
                         }
                         Err(error) => {
-                            error!("Error occurred reading from miner: {error}");
+                            warn!("Error occurred reading from miner: {error}");
 
                             *connection_ref = None;
                             score.set(score.get() + added as u128);
@@ -563,6 +558,12 @@ impl Validator {
 
         match TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
             Ok(mut stream) => {
+                if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(1))) {
+                    warn!("Not continuing connection to uid {uid} at {address} because could not configure read timeout, {e}", uid = neuron.uid.0);
+
+                    return None;
+                }
+
                 let message = VerificationMessage {
                     nonce: 0,
                     netuid: *config::NETUID,
@@ -581,13 +582,13 @@ impl Validator {
                 let signature = sign_message(signer, &message);
 
                 if let Err(e) = stream.write((&message).as_ref()) {
-                    error!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
+                    warn!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
 
                     return None;
                 };
 
                 if let Err(e) = stream.write(&signature) {
-                    error!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
+                    warn!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
 
                     return None;
                 }
@@ -675,6 +676,10 @@ impl Validator {
 
                     let start = index as u64 * chunk_size;
                     let end = min((index as u64 + 1) * chunk_size, byte_count);
+
+                    if start == end {
+                        break
+                    }
 
                     let event = UnsafeCell::new(EventFuture::<(u64, bool)>::new());
                     completion_events.push((uid, start..end, event));
