@@ -784,7 +784,12 @@ impl Validator {
         })).join_all().await;
 
         for i in 1..connection_count - 1 {
-            let end = ((i + 1) * chunk_size) as usize;
+            let start = (i * chunk_size) as usize;
+            let end = min((i + 1) * chunk_size, byte_count) as usize;
+
+            if start >= end {
+                break
+            }
 
             let [a, b] = self.current_row[end..end + 1] else {
                 unreachable!()
