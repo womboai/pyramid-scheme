@@ -718,7 +718,7 @@ impl Validator {
                     uid,
                     neurons,
                     row,
-                )
+                ).await
             }
         })).join_all().await;
     }
