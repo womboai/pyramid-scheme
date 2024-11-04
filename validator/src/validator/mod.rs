@@ -8,7 +8,6 @@ use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
 use std::random::random;
 use std::sync::{Arc, mpmc};
-use std::sync::mpmc::{Receiver, Sender};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -646,18 +645,8 @@ impl Validator {
             let neurons = UnsafeSendRef::from(neurons);
             let row = unsafe { current_row.share() };
 
-            async fn handle_event(
-                unfinished_sender: Sender<Range<u64>>,
-                finished_sender: Sender<u16>,
-                unfinished_receiver: Receiver<Range<u64>>,
-                finished_receiver: Receiver<u16>,
-                future: EventFuture<(u64, bool)>,
-                range: Range<u64>,
-                uid: u16,
-                neurons: UnsafeSendRef<'static, [NeuronData]>, // hack to bypass the fact that NeuronData is not Send
-                row: CurrentRow,
-            ) {
-                let (written, connected) = future.await;
+            async move {
+                let (written, connected) = future.into_inner().await;
 
                 let required = range.end - range.start;
 
@@ -705,20 +694,6 @@ impl Validator {
                         }
                     }
                 }
-            }
-
-            async move {
-                handle_event(
-                    unfinished_sender,
-                    finished_sender,
-                    unfinished_receiver,
-                    finished_receiver,
-                    future.into_inner(),
-                    range,
-                    uid,
-                    neurons,
-                    row,
-                ).await
             }
         })).join_all().await;
     }
