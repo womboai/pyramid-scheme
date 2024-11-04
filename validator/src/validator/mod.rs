@@ -455,7 +455,7 @@ impl Validator {
                     Ok(len) => {
                         if len == 0 {
                             warn!(
-                                "Failed to write to miner connection while there's more to process"
+                                "Failed to write to miner {uid} connection while there's more to process"
                             );
 
                             score.set(score.get() + added as u128);
@@ -467,7 +467,7 @@ impl Validator {
                         len
                     }
                     Err(error) => {
-                        warn!("Error occurred writing to miner: {error}");
+                        warn!("Error occurred writing to miner {uid}: {error}");
 
                         score.set(score.get() + added as u128);
                         end_trigger.complete((added, false));
@@ -496,9 +496,8 @@ impl Validator {
                     let len = match connection.read(&mut buffer) {
                         Ok(len) => {
                             if len == 0 {
-                                warn!("Failed to read from miner connection");
+                                warn!("Failed to read from miner {uid} connection");
 
-                                *connection_ref = None;
                                 score.set(score.get() + added as u128);
                                 end_trigger.complete((added, false));
 
@@ -508,7 +507,7 @@ impl Validator {
                             len
                         }
                         Err(error) => {
-                            warn!("Error occurred reading from miner: {error}");
+                            warn!("Error occurred reading from miner {uid}: {error}");
 
                             score.set(score.get() + added as u128);
                             end_trigger.complete((added, false));
@@ -821,10 +820,6 @@ impl Validator {
                 error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }
-    }
-
-    pub(crate) fn account_id(&self) -> &AccountId {
-        self.signer.account_id()
     }
 
     fn normalize_pair(a: u8, b: u8) -> (u8, u8) {

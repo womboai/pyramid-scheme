@@ -9,10 +9,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dotenv::dotenv;
-use opentelemetry::{KeyValue, Value};
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_sdk::logs::LoggerProvider;
-use opentelemetry_sdk::Resource;
 use threadpool::ThreadPool;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -306,22 +302,6 @@ async fn main() {
         warn!("Could not load .env: {e}");
     }
 
-    let mut miner = Miner::new().await;
-
-    let exporter_builder = opentelemetry_otlp::new_exporter().tonic();
-
-    let provider: LoggerProvider = LoggerProvider::builder()
-        .with_resource(Resource::new(vec![
-            KeyValue::new("service.name", "pyramid-scheme-miner"),
-            KeyValue::new("neuron.type", "validator"),
-            KeyValue::new("neuron.uid", Value::I64(miner.uid as i64)),
-            KeyValue::new("neuron.hotkey", miner.account_id.to_string()),
-        ]))
-        .with_batch_exporter(exporter_builder.build_log_exporter().unwrap(), opentelemetry_sdk::runtime::Tokio)
-        .build();
-
-    let otel = OpenTelemetryTracingBridge::new(&provider);
-
     let filter_layer = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
@@ -332,11 +312,12 @@ async fn main() {
 
     tracing_subscriber::registry()
         .with(fmt)
-        .with(otel)
         .with(filter_layer)
         .init();
 
     info!("Starting miner v{}", env!("CARGO_PKG_VERSION"));
+
+    let mut miner = Miner::new().await;
 
     miner.run(*config::PORT).await;
 }
