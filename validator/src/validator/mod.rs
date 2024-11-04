@@ -458,7 +458,6 @@ impl Validator {
                                 "Failed to write to miner connection while there's more to process"
                             );
 
-                            *connection_ref = None;
                             score.set(score.get() + added as u128);
                             end_trigger.complete((added, false));
 
@@ -470,7 +469,6 @@ impl Validator {
                     Err(error) => {
                         warn!("Error occurred writing to miner: {error}");
 
-                        *connection_ref = None;
                         score.set(score.get() + added as u128);
                         end_trigger.complete((added, false));
 
@@ -512,7 +510,6 @@ impl Validator {
                         Err(error) => {
                             warn!("Error occurred reading from miner: {error}");
 
-                            *connection_ref = None;
                             score.set(score.get() + added as u128);
                             end_trigger.complete((added, false));
 
