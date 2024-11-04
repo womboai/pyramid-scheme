@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::task::{JoinSet, LocalSet};
+use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -633,7 +633,7 @@ impl Validator {
             .collect()
     }
 
-    async fn handle_connection_events(neurons: &'static [NeuronData], completion_events: Vec<(u16, Range<u64>, UnsafeCell<EventFuture<(u64, bool)>>)>, current_row: CurrentRow) {
+    async fn handle_connection_events(neurons: UnsafeSendRef<'static, [NeuronData]>, completion_events: Vec<(u16, Range<u64>, UnsafeCell<EventFuture<(u64, bool)>>)>, current_row: CurrentRow) {
         let (unfinished_sender, unfinished_receiver) = mpmc::channel();
         let (finished_sender, finished_receiver) = mpmc::channel();
 
@@ -643,7 +643,6 @@ impl Validator {
             let unfinished_receiver = unfinished_receiver.clone();
             let finished_receiver = finished_receiver.clone();
 
-            let neurons = UnsafeSendRef::from(neurons);
             let row = unsafe { current_row.share() };
 
             async fn handle_event(
@@ -681,7 +680,7 @@ impl Validator {
                                     event,
                                     range.start + written..range.end,
                                     finished_uid,
-                                    neurons,
+                                    neurons.clone(),
                                     row,
                                 )).await;
 
@@ -716,7 +715,7 @@ impl Validator {
                                 event,
                                 unfinished_range,
                                 uid,
-                                neurons,
+                                neurons.clone(),
                                 row,
                             )).await;
                         }
@@ -735,7 +734,7 @@ impl Validator {
                 future.into_inner(),
                 range,
                 uid,
-                neurons,
+                neurons.clone(),
                 row,
             )
         })).join_all().await;
@@ -783,8 +782,6 @@ impl Validator {
         let chunk_size = byte_count.div_ceil(connection_count);
         let mut completion_events = Vec::with_capacity(connections.len());
 
-        let local = LocalSet::new();
-
         thread::scope(|scope| {
             let mut handles = Vec::with_capacity(connections.len());
 
@@ -817,16 +814,14 @@ impl Validator {
                 }
             }
 
-            local.spawn_local(
+            tokio::task::spawn(
                 Self::handle_connection_events(
-                    unsafe { transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons) },
+                    UnsafeSendRef::from(unsafe { transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons) }),
                     completion_events,
                     unsafe { self.current_row.share() },
                 ),
             )
         }).await?;
-
-        local.await;
 
         for i in 0..connection_count - 1 {
             let end = ((i + 1) * chunk_size) as usize;

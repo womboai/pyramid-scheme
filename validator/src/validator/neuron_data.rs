@@ -44,6 +44,12 @@ impl Add<u128> for Score {
 
 pub struct UnsafeSendRef<'a, T>(&'a T, PhantomData<T>) where T : ?Sized;
 
+impl<'a, T> Clone for UnsafeSendRef<'a, T> where T : ?Sized {
+    fn clone(&self) -> Self {
+        Self(self.0, PhantomData::default())
+    }
+}
+
 unsafe impl<'a, T> Send for UnsafeSendRef<'a, T> where T : ?Sized {}
 
 impl<'a, T> From<&'a T> for UnsafeSendRef<'a, T> where T : ?Sized {
