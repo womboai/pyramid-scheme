@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::task::JoinSet;
+use tokio::task::{JoinSet, LocalSet};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -783,6 +783,8 @@ impl Validator {
         let chunk_size = byte_count.div_ceil(connection_count);
         let mut completion_events = Vec::with_capacity(connections.len());
 
+        let local = LocalSet::new();
+
         thread::scope(|scope| {
             let mut handles = Vec::with_capacity(connections.len());
 
@@ -815,7 +817,7 @@ impl Validator {
                 }
             }
 
-            tokio::task::spawn_local(
+            local.spawn_local(
                 Self::handle_connection_events(
                     unsafe { transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons) },
                     completion_events,
@@ -823,6 +825,8 @@ impl Validator {
                 ),
             )
         }).await?;
+
+        local.await;
 
         for i in 0..connection_count - 1 {
             let end = ((i + 1) * chunk_size) as usize;
