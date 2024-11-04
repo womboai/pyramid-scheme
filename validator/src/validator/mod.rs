@@ -560,8 +560,14 @@ impl Validator {
 
         match TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
             Ok(mut stream) => {
-                if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(1))) {
+                if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
                     warn!("Not continuing connection to uid {uid} at {address} because could not configure read timeout, {e}", uid = neuron.uid.0);
+
+                    return None;
+                }
+
+                if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
+                    warn!("Not continuing connection to uid {uid} at {address} because could not configure write timeout, {e}", uid = neuron.uid.0);
 
                     return None;
                 }
@@ -627,77 +633,7 @@ impl Validator {
             .collect()
     }
 
-    async fn do_step(&mut self) -> Result<()> {
-        info!("Evolution step {}", self.step);
-
-        let current_block = self.subtensor.get_block_number().await?;
-        let mut elapsed_blocks = current_block - self.last_metagraph_sync;
-
-        if elapsed_blocks >= *config::EPOCH_LENGTH {
-            self.sync(Some(current_block)).await?;
-            elapsed_blocks = 0;
-        }
-
-        while self
-            .neurons
-            .iter()
-            .all(|neuron| neuron.connection.as_ref().is_none())
-        {
-            let sleep_for = *config::EPOCH_LENGTH - elapsed_blocks;
-            info!("No miners found, waiting {} blocks", sleep_for);
-
-            sleep(Duration::from_secs(sleep_for * 12)).await;
-            self.sync(None).await?;
-            elapsed_blocks = 0;
-        }
-
-        let connections = unsafe {
-            // SAFETY: Safe because we do not resync(which modifies the references) until the connections are no longer used.
-            self.find_connections()
-        };
-
-        self.current_row
-            .ensure_capacity(Self::current_row_file_size(self.step))?;
-
-        self.center_column
-            .ensure_capacity(Self::center_column_file_size(self.step))?;
-
-        let connection_count = connections.len() as u64;
-
-        let byte_count = (self.step * 2 + 3).div_ceil(8);
-
-        let chunk_size = byte_count.div_ceil(connection_count);
-        let mut completion_events = Vec::with_capacity(connections.len());
-
-        thread::scope(|scope| {
-            for (index, (uid, connection)) in connections.into_iter().enumerate() {
-                unsafe {
-                    // SAFETY: This is safe as the data read/written does not overlap between threads
-                    let row = self.current_row.share();
-
-                    let score = UnsafeSendRef::from(&self.neurons[uid as usize].score);
-
-                    let start = index as u64 * chunk_size;
-                    let end = min((index as u64 + 1) * chunk_size, byte_count);
-
-                    if start == end {
-                        break;
-                    }
-
-                    let event = UnsafeCell::new(EventFuture::<(u64, bool)>::new());
-                    completion_events.push((uid, start..end, event));
-
-                    // Get unsafe mutable reference, allows compiler to incorrectly assume inside other thread that it is the only reference that exists
-                    // SAFETY: Safe because the other reference(from completion_events) simply awaits this event future, which is a Sync operation
-                    let event = &mut *completion_events.last().unwrap().2.get();
-
-                    scope.spawn(move || {
-                        Self::handle_connection(row, connection, score, start, end, uid, event)
-                    });
-                }
-            }
-        });
-
+    async fn handle_connection_events(neurons: &'static [NeuronData], completion_events: Vec<(u16, Range<u64>, UnsafeCell<EventFuture<(u64, bool)>>)>, current_row: CurrentRow) {
         let (unfinished_sender, unfinished_receiver) = mpmc::channel();
         let (finished_sender, finished_receiver) = mpmc::channel();
 
@@ -707,8 +643,8 @@ impl Validator {
             let unfinished_receiver = unfinished_receiver.clone();
             let finished_receiver = finished_receiver.clone();
 
-            let neurons = UnsafeSendRef::from(unsafe { transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons) });
-            let row = unsafe { self.current_row.share() };
+            let neurons = UnsafeSendRef::from(neurons);
+            let row = unsafe { current_row.share() };
 
             async fn handle_event(
                 unfinished_sender: Sender<Range<u64>>,
@@ -785,6 +721,90 @@ impl Validator {
                 )
             }
         })).join_all().await;
+    }
+
+    async fn do_step(&mut self) -> Result<()> {
+        info!("Evolution step {}", self.step);
+
+        let current_block = self.subtensor.get_block_number().await?;
+        let mut elapsed_blocks = current_block - self.last_metagraph_sync;
+
+        if elapsed_blocks >= *config::EPOCH_LENGTH {
+            self.sync(Some(current_block)).await?;
+            elapsed_blocks = 0;
+        }
+
+        while self
+            .neurons
+            .iter()
+            .all(|neuron| neuron.connection.as_ref().is_none())
+        {
+            let sleep_for = *config::EPOCH_LENGTH - elapsed_blocks;
+            info!("No miners found, waiting {} blocks", sleep_for);
+
+            sleep(Duration::from_secs(sleep_for * 12)).await;
+            self.sync(None).await?;
+            elapsed_blocks = 0;
+        }
+
+        let connections = unsafe {
+            // SAFETY: Safe because we do not resync(which modifies the references) until the connections are no longer used.
+            self.find_connections()
+        };
+
+        self.current_row
+            .ensure_capacity(Self::current_row_file_size(self.step))?;
+
+        self.center_column
+            .ensure_capacity(Self::center_column_file_size(self.step))?;
+
+        let connection_count = connections.len() as u64;
+
+        let byte_count = (self.step * 2 + 3).div_ceil(8);
+
+        let chunk_size = byte_count.div_ceil(connection_count);
+        let mut completion_events = Vec::with_capacity(connections.len());
+
+        thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(connections.len());
+
+            for (index, (uid, connection)) in connections.into_iter().enumerate() {
+                unsafe {
+                    // SAFETY: This is safe as the data read/written does not overlap between threads
+                    let row = self.current_row.share();
+
+                    let score = UnsafeSendRef::from(&self.neurons[uid as usize].score);
+
+                    let start = index as u64 * chunk_size;
+                    let end = min((index as u64 + 1) * chunk_size, byte_count);
+
+                    if start == end {
+                        break;
+                    }
+
+                    let event = UnsafeCell::new(EventFuture::<(u64, bool)>::new());
+                    completion_events.push((uid, start..end, event));
+
+                    // Get unsafe mutable reference, allows compiler to incorrectly assume inside other thread that it is the only reference that exists
+                    // SAFETY: Safe because the other reference(from completion_events) simply awaits this event future, which is a Sync operation
+                    let event = &mut *completion_events.last().unwrap().2.get();
+
+                    let handle = scope.spawn(move || {
+                        Self::handle_connection(row, connection, score, start, end, uid, event);
+                    });
+
+                    handles.push(handle);
+                }
+            }
+
+            tokio::task::spawn_local(
+                Self::handle_connection_events(
+                    unsafe { transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons) },
+                    completion_events,
+                    unsafe { self.current_row.share() },
+                ),
+            )
+        }).await?;
 
         for i in 0..connection_count - 1 {
             let end = ((i + 1) * chunk_size) as usize;
