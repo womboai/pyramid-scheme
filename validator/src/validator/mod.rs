@@ -180,8 +180,8 @@ impl Validator {
         let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
 
-        let uid = if let Some(neuron_info) = neuron_info {
-            neuron_info.uid.0
+        let neuron_info = if let Some(neuron_info) = neuron_info {
+            neuron_info.clone()
         } else {
             Self::not_registered(signer.account_id());
         };
@@ -216,24 +216,31 @@ impl Validator {
                 if state_info.hotkey == info.hotkey {
                     NeuronData {
                         score: state_info.score.into(),
-                        connection: Self::connect_to_miner(&signer, uid, &info, matches!(state_info.score, Score::Cheater)).into(),
+                        connection: Self::connect_to_miner(&signer, neuron_info.uid.0, &info, matches!(state_info.score, Score::Cheater)).into(),
                         info,
                     }
                 } else {
                     NeuronData {
                         score: Score::default().into(),
-                        connection: Self::connect_to_miner(&signer, uid, &info, false).into(),
+                        connection: Self::connect_to_miner(&signer, neuron_info.uid.0, &info, false).into(),
                         info,
                     }
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Set weights if enough time has passed
+        if last_metagraph_sync - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
+            if let Err(e) = Self::set_weights(&neurons, &subtensor, &signer).await {
+                println!("Failed to set weights. {e}");
+            }
+        }
 
         Self {
             signer,
             subtensor,
             neurons,
-            uid,
+            uid: neuron_info.uid.0,
             current_row,
             center_column,
             step: state.step,
@@ -284,21 +291,20 @@ impl Validator {
         Ok(serde_json::from_str(&json)?)
     }
 
-    async fn set_weights(&self) -> Result<()> {
-        if self.neurons.is_empty() {
+    async fn set_weights(neurons: &[NeuronData], subtensor: &Subtensor, signer: &Signer) -> Result<()> {
+        if neurons.is_empty() {
             return Ok(());
         }
 
         info!("Setting weights");
 
-        let max_score: u128 = self
-            .neurons
+        let max_score: u128 = neurons
             .iter()
             .map(|info| info.score.get().into())
             .max()
             .unwrap();
 
-        let scores = self.neurons.iter().map(|neuron| {
+        let scores = neurons.iter().map(|neuron| {
             let normalized_score = match neuron.score.get() {
                 Score::Legitimate(score) => if max_score == 0 {
                     u16::MAX
@@ -311,8 +317,8 @@ impl Validator {
             (neuron.info.uid.0, normalized_score)
         });
 
-        self.subtensor
-            .set_weights(&self.signer, *config::NETUID, scores, VERSION_KEY)
+        subtensor
+            .set_weights(&signer, *config::NETUID, scores, VERSION_KEY)
             .await?;
 
         Ok(())
@@ -379,7 +385,7 @@ impl Validator {
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            if let Err(e) = self.set_weights().await {
+            if let Err(e) = Self::set_weights(&self.neurons, &self.subtensor, &self.signer).await {
                 error!("Failed to set weights. {e}");
             }
         }
@@ -642,7 +648,8 @@ impl Validator {
             info!("No miners found, waiting {} blocks", sleep_for);
 
             sleep(Duration::from_secs(sleep_for * 12)).await;
-            self.sync(Some(current_block)).await?;
+            self.sync(None).await?;
+            elapsed_blocks = 0;
         }
 
         let connections = unsafe {
