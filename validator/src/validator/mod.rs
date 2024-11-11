@@ -479,7 +479,7 @@ impl Validator {
                 let mut read = 0;
 
                 while read < written {
-                    let range = from + read + added as usize..from + added as usize + written + read;
+                    let range = from + read + added as usize..from + read + added as usize + written;
 
                     let should_validate = if let Some(validation_start_index) =
                         validation_start_index
@@ -516,10 +516,13 @@ impl Validator {
                         }
                     };
 
+
+                    let read_chunk_range = range.start + read..range.start + read + len;
+
                     if should_validate {
                         info!("Verifying results of {uid}");
 
-                        if !Self::verify_result(&current_row[range.start..range.start + len], &buffer[..len]) {
+                        if !Self::verify_result(&current_row[read_chunk_range], &buffer[..len]) {
                             info!("{uid} marked as cheater");
 
                             score.set(Score::Cheater);
@@ -531,7 +534,7 @@ impl Validator {
                         }
                     }
 
-                    (&mut current_row[range.start..range.start + len]).copy_from_slice(&buffer[..len]);
+                    (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                     read += len;
                 }
 
