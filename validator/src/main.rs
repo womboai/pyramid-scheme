@@ -2,21 +2,19 @@
 #![feature(random)]
 #![feature(mpmc_channel)]
 
-use std::net::Ipv4Addr;
-use axum::Router;
+use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
+use axum::Router;
 use dotenv::dotenv;
+use neuron::{config, hotkey_location, load_key_seed, setup_opentelemetry, signer_from_seed};
+use tracing::info;
+
+use std::net::Ipv4Addr;
 use tokio;
 use tokio::net::TcpListener;
-use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, fmt};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use neuron::config;
-use crate::api::{current_step, last_n_bits};
 
-mod validator;
 mod api;
+mod validator;
 
 async fn api_main() {
     let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
@@ -34,27 +32,24 @@ async fn api_main() {
 #[tokio::main]
 async fn main() {
     if let Err(e) = dotenv() {
-        warn!("Could not load .env: {e}");
+        println!("Could not load .env: {e}");
     }
 
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+    let hotkey_location = hotkey_location(
+        config::WALLET_PATH.clone(),
+        &*config::WALLET_NAME,
+        &*config::HOTKEY_NAME,
+    );
 
-    let fmt = fmt::layer()
-        .with_line_number(true)
-        .with_thread_ids(true);
+    let seed = load_key_seed(&hotkey_location).unwrap();
 
-    tracing_subscriber::registry()
-        .with(fmt)
-        .with(filter_layer)
-        .init();
+    let signer = signer_from_seed(&seed).unwrap();
 
-    info!("Starting validator v{}", env!("CARGO_PKG_VERSION"));
+    setup_opentelemetry(&signer.account_id(), "validator");
+
+    let mut validator = validator::Validator::new(signer).await;
 
     tokio::task::spawn(api_main());
-
-    let mut validator = validator::Validator::new().await;
 
     validator.run().await;
 }
