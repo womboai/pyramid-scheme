@@ -1,9 +1,8 @@
-use std::cell::Cell;
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 pub struct EventFuture<T>(Arc<Mutex<Data<T>>>);
@@ -53,9 +52,7 @@ where
 
         let complete = data.set.load(Ordering::Acquire);
         if complete {
-            let data = unsafe {
-                data.data.assume_init()
-            };
+            let data = unsafe { data.data.assume_init() };
 
             Poll::Ready(data)
         } else {
