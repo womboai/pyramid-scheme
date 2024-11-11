@@ -522,7 +522,7 @@ impl Validator {
                     if should_validate {
                         info!("Verifying results of {uid}");
 
-                        if !Self::verify_result(&current_row[read_chunk_range], &buffer[..len]) {
+                        if !Self::verify_result(&current_row[read_chunk_range.clone()], &buffer[..len]) {
                             info!("{uid} marked as cheater");
 
                             score.set(Score::Cheater);
