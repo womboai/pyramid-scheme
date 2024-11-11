@@ -479,7 +479,7 @@ impl Validator {
                 let mut read = 0;
 
                 while read < written {
-                    let range = from + read + added as usize..from + read + added as usize + written;
+                    let range = from + read + added as usize..from + added as usize + written;
 
                     let should_validate = if let Some(validation_start_index) =
                         validation_start_index
@@ -493,7 +493,7 @@ impl Validator {
                         false
                     };
 
-                    let len = match connection.read(&mut buffer) {
+                    let len = match connection.read(&mut buffer[0..range.len()]) {
                         Ok(len) => {
                             if len == 0 {
                                 warn!("Failed to read from miner {uid} connection");
@@ -517,7 +517,7 @@ impl Validator {
                     };
 
 
-                    let read_chunk_range = range.start + read..range.start + read + len;
+                    let read_chunk_range = range.start..range.start + len;
 
                     if should_validate {
                         info!("Verifying results of {uid}");
