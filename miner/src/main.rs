@@ -16,7 +16,7 @@ use neuron::{
     Subtensor,
 };
 use threadpool::ThreadPool;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 mod signature_checking;
 
@@ -299,7 +299,7 @@ impl Miner {
 #[tokio::main]
 async fn main() {
     if let Err(e) = dotenv() {
-        warn!("Could not load .env: {e}");
+        println!("Could not load .env: {e}");
     }
 
     let hotkey_location = hotkey_location(
