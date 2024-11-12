@@ -33,7 +33,7 @@ mod neuron_data;
 
 const VERSION_KEY: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
-const VALIDATION_CHANCE: f32 = 0.05;
+const VALIDATION_CHANCE: f32 = 0.3;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -479,7 +479,7 @@ impl Validator {
                 let mut read = 0;
 
                 while read < written {
-                    let range = from + read + added as usize..from + added as usize + written;
+                    let range = from + read + added as usize..from + written + added as usize;
 
                     let should_validate = if let Some(validation_start_index) =
                         validation_start_index
@@ -515,7 +515,6 @@ impl Validator {
                             return;
                         }
                     };
-
 
                     let read_chunk_range = range.start..range.start + len;
 
