@@ -31,9 +31,10 @@ mod memory_storage;
 mod event_future;
 mod neuron_data;
 
-const VERSION_KEY: u64 = 1;
+const WEIGHTS_VERSION: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
 const VALIDATION_CHANCE: f32 = 0.3;
+const DATA_SPEC_VERSION: u64 = 1;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -91,6 +92,7 @@ struct KeyScoreInfo {
 struct ValidatorState {
     step: u64,
     key_info: Vec<KeyScoreInfo>,
+    version: Option<u64>,
 }
 
 impl ValidatorState {
@@ -102,7 +104,7 @@ impl ValidatorState {
             })
             .collect();
 
-        Self { step: 1, key_info }
+        Self { step: 1, key_info, version: Some(DATA_SPEC_VERSION) }
     }
 }
 
@@ -111,6 +113,7 @@ impl Default for ValidatorState {
         Self {
             step: 1,
             key_info: Vec::new(),
+            version: Some(DATA_SPEC_VERSION),
         }
     }
 }
@@ -186,9 +189,22 @@ impl Validator {
             Self::not_registered(signer.account_id());
         };
 
-        let state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
+        let mut state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
+
+        let valid_state = if let Some(version) = state.version {
+            version == DATA_SPEC_VERSION
+        } else {
+            false
+        };
 
         fs::create_dir_all("state").unwrap();
+
+        if !valid_state {
+            fs::remove_file(CURRENT_ROW_FILE).unwrap();
+            fs::remove_file(CENTER_COLUMN_FILE).unwrap();
+
+            state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
+        }
 
         let mut current_row = CurrentRow::open(
             CURRENT_ROW_FILE,
@@ -268,6 +284,7 @@ impl Validator {
                 })
                 .collect(),
             step: self.step,
+            version: Some(DATA_SPEC_VERSION),
         };
 
         let json = serde_json::to_string(&state)?;
@@ -318,7 +335,7 @@ impl Validator {
         });
 
         subtensor
-            .set_weights(&signer, *config::NETUID, scores, VERSION_KEY)
+            .set_weights(&signer, *config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION)
             .await?;
 
         Ok(())
