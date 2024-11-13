@@ -900,11 +900,7 @@ impl Validator {
                 info!("Spawning worker thread {i}");
 
                 let handle = scope.spawn(|| {
-                    loop {
-                        if data_processed.load(Ordering::Relaxed) >= byte_count {
-                            break true
-                        }
-
+                    while data_processed.load(Ordering::Relaxed) < byte_count {
                         info!("Getting next work chunk");
 
                         let Ok(range) = work_queue_receiver.try_recv() else {
