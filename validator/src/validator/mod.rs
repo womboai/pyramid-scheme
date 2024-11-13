@@ -26,9 +26,10 @@ use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData
 mod memory_storage;
 mod neuron_data;
 
-const VERSION_KEY: u64 = 1;
+const WEIGHTS_VERSION: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
-const VALIDATION_CHANCE: f32 = 0.05;
+const VALIDATION_CHANCE: f32 = 0.3;
+const DATA_SPEC_VERSION: u64 = 1;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -86,6 +87,7 @@ struct KeyScoreInfo {
 struct ValidatorState {
     step: u64,
     key_info: Vec<KeyScoreInfo>,
+    version: Option<u64>,
 }
 
 impl ValidatorState {
@@ -97,7 +99,7 @@ impl ValidatorState {
             })
             .collect();
 
-        Self { step: 1, key_info }
+        Self { step: 1, key_info, version: Some(DATA_SPEC_VERSION) }
     }
 }
 
@@ -106,6 +108,7 @@ impl Default for ValidatorState {
         Self {
             step: 1,
             key_info: Vec::new(),
+            version: Some(DATA_SPEC_VERSION),
         }
     }
 }
@@ -192,9 +195,22 @@ impl Validator {
             Self::not_registered(signer.account_id());
         };
 
-        let state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
+        let mut state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
+
+        let valid_state = if let Some(version) = state.version {
+            version == DATA_SPEC_VERSION
+        } else {
+            false
+        };
 
         fs::create_dir_all("state").unwrap();
+
+        if !valid_state {
+            fs::remove_file(CURRENT_ROW_FILE).unwrap();
+            fs::remove_file(CENTER_COLUMN_FILE).unwrap();
+
+            state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
+        }
 
         let mut current_row = CurrentRow::open(
             CURRENT_ROW_FILE,
@@ -274,6 +290,7 @@ impl Validator {
                 })
                 .collect(),
             step: self.step,
+            version: Some(DATA_SPEC_VERSION),
         };
 
         let json = serde_json::to_string(&state)?;
@@ -324,7 +341,7 @@ impl Validator {
         });
 
         subtensor
-            .set_weights(&signer, *config::NETUID, scores, VERSION_KEY)
+            .set_weights(&signer, *config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION)
             .await?;
 
         Ok(())
@@ -486,7 +503,7 @@ impl Validator {
                 let mut read = 0;
 
                 while read < written {
-                    let range = from + read + processed as usize..from + processed as usize + written + read;
+                    let range = from + read + processed as usize..from + written + processed as usize;
 
                     let should_validate = if let Some(validation_start_index) =
                         validation_start_index
@@ -500,7 +517,7 @@ impl Validator {
                         false
                     };
 
-                    let len = match connection.read(&mut buffer) {
+                    let len = match connection.read(&mut buffer[0..range.len()]) {
                         Ok(len) => {
                             if len == 0 {
                                 warn!("Failed to read from miner {uid} connection");
@@ -527,10 +544,12 @@ impl Validator {
                         }
                     };
 
+                    let read_chunk_range = range.start..range.start + len;
+
                     if should_validate {
                         info!("Verifying results of {uid}");
 
-                        if !Self::verify_result(&current_row[range.start..range.start + len], &buffer[..len]) {
+                        if !Self::verify_result(&current_row[read_chunk_range.clone()], &buffer[..len]) {
                             info!("{uid} marked as cheater");
 
                             completion_events.send(ProcessingCompletionResult {
@@ -542,7 +561,7 @@ impl Validator {
                         }
                     }
 
-                    (&mut current_row[range.start..range.start + len]).copy_from_slice(&buffer[..len]);
+                    (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                     read += len;
                 }
 

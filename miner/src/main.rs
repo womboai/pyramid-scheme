@@ -151,6 +151,7 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
         }
 
         solver.solve(&mut buffer, 0, len);
+        solver.last = 0;
 
         let mut written = 0;
 
