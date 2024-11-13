@@ -9,6 +9,7 @@ use std::sync::mpmc::{self, Sender};
 use std::time::Duration;
 use std::{fs, thread};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::sleep;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -715,7 +716,11 @@ impl Validator {
 
             let _handle = scope.spawn(|| {
                 while data_processed.load(Ordering::Relaxed) < byte_count {
-                    let event: ProcessingCompletionResult = completion_receiver.recv().expect("completion channel should not be closed");
+                    let Ok(event): Result<ProcessingCompletionResult, _> = completion_receiver.try_recv() else {
+                        sleep(Duration::from_millis(100));
+                        continue;
+                    };
+
                     let uid = event.uid;
 
                     let mut score = self.neurons[uid as usize].score.write().unwrap();
@@ -760,7 +765,10 @@ impl Validator {
                     while data_processed.load(Ordering::Relaxed) < byte_count {
                         info!("Getting next work chunk");
 
-                        let range = work_queue_receiver.recv().expect("Work queue channel should not be closed");
+                        let Ok(range) = work_queue_receiver.try_recv() else {
+                            sleep(Duration::from_millis(100));
+                            continue;
+                        };
 
                         info!("Finding suitable miner for {range:?}");
 
