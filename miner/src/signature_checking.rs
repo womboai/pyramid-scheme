@@ -1,5 +1,5 @@
 use neuron::auth::VerificationMessage;
-use neuron::{AccountId, NeuronInfoLite, config};
+use neuron::{config, AccountId, NeuronInfoLite};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,17 +14,14 @@ pub enum IncorrectVerificationMessageInformation {
     },
 
     #[error("Verification message reported miner UID as {reported} but it is {current}")]
-    MismatchedUid {
-        reported: u16,
-        current: u16,
-    },
+    MismatchedUid { reported: u16, current: u16 },
 
     #[error("Verification message reported validator UID as {uid} with hotkey {reported_hotkey}, but UID {uid} is associated with hotkey {expected_hotkey}")]
     MismatchedValidatorInfo {
         uid: u16,
         reported_hotkey: AccountId,
         expected_hotkey: AccountId,
-    }
+    },
 }
 
 pub fn info_matches(
@@ -34,7 +31,9 @@ pub fn info_matches(
     miner_uid: u16,
 ) -> Result<(), IncorrectVerificationMessageInformation> {
     if message.netuid != *config::NETUID {
-        return Err(IncorrectVerificationMessageInformation::IncorrectNetuid(message.netuid));
+        return Err(IncorrectVerificationMessageInformation::IncorrectNetuid(
+            message.netuid,
+        ));
     }
 
     if &message.miner.account_id != account_id {
@@ -53,11 +52,13 @@ pub fn info_matches(
 
     let expected_validator_hotkey = &neurons[message.validator.uid as usize].hotkey;
     if expected_validator_hotkey != &message.validator.account_id {
-        return Err(IncorrectVerificationMessageInformation::MismatchedValidatorInfo {
-            uid: message.validator.uid,
-            reported_hotkey: message.validator.account_id.clone(),
-            expected_hotkey: expected_validator_hotkey.clone()
-        });
+        return Err(
+            IncorrectVerificationMessageInformation::MismatchedValidatorInfo {
+                uid: message.validator.uid,
+                reported_hotkey: message.validator.account_id.clone(),
+                expected_hotkey: expected_validator_hotkey.clone(),
+            },
+        );
     }
 
     Ok(())

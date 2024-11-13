@@ -24,20 +24,18 @@ pub struct MemoryMappedFile {
 impl MemoryMappedFile {
     fn new(file: File, path: impl AsRef<Path>) -> Result<Self> {
         // SAFETY: This would typically not be safe as this is technically a self-referential
-        //  struct. Mmap is using a reference of `&file` without a lifetime.
+        //  struct. Mmap is using a reference of `&File` without a lifetime.
         //  However, this works as mmap uses the file descriptor internally,
         //  so even if {File} is moved, the descriptor remains the same,
         //  and the file descriptor is closed at the same time the mmap is closed.
 
         let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
 
-        Ok(
-            Self {
-                mmap,
-                file,
-                path: path.as_ref().to_path_buf(),
-            }
-        )
+        Ok(Self {
+            mmap,
+            file,
+            path: path.as_ref().to_path_buf(),
+        })
     }
 }
 
@@ -80,6 +78,9 @@ impl DerefMut for MemoryMappedFile {
         &mut self.mmap
     }
 }
+
+unsafe impl Sync for MemoryMappedFile {}
+unsafe impl Send for MemoryMappedFile {}
 
 pub struct MemoryMappedStorage {
     swap_file: MemoryMappedFile,
@@ -135,3 +136,6 @@ impl DerefMut for MemoryMappedStorage {
         &mut self.swap_file
     }
 }
+
+unsafe impl Sync for MemoryMappedStorage {}
+unsafe impl Send for MemoryMappedStorage {}
