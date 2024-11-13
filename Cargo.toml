@@ -10,7 +10,6 @@ members = [
 
 [workspace.dependencies]
 tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
 dirs = "5.0.1"
 anyhow = "1.0.91"
 threadpool = "1.8.1"
@@ -21,11 +20,5 @@ serde_json = "1.0"
 dotenv = "0.15.0"
 
 thiserror = "1.0.65"
-
-opentelemetry = "0.26.0"
-opentelemetry-appender-tracing = "0.26.0"
-opentelemetry-stdout = "0.26.0"
-opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.26.0"
 
 tokio = { version = "1.41.0", features = ["full"] }

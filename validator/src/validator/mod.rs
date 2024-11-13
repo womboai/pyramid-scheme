@@ -893,7 +893,7 @@ impl Validator {
                     transmute::<&[NeuronData], &'static [NeuronData]>(&self.neurons)
                 }),
                 completion_events,
-                current_row,
+                unsafe { self.current_row.share() },
                 metrics,
             ))
         })
