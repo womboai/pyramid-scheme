@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
@@ -420,7 +420,7 @@ impl Validator {
                         &self.signer,
                         self.uid,
                         &neurons[i],
-                        matches!(neuron.score.get(), Score::Cheater),
+                        matches!(*neuron.score.get_mut().unwrap(), Score::Cheater),
                         self.metrics.clone(),
                     )
                     .into()

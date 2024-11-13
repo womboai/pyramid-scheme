@@ -9,6 +9,12 @@ members = [
 ]
 
 [workspace.dependencies]
+opentelemetry = "0.26.0"
+opentelemetry-appender-tracing = "0.26.0"
+opentelemetry-stdout = "0.26.0"
+opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.26.0"
+
 tracing = "0.1.40"
 dirs = "5.0.1"
 anyhow = "1.0.91"
