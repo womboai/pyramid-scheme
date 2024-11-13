@@ -31,6 +31,8 @@ async fn api_main() {
 
 #[tokio::main]
 async fn main() {
+    let metrics = validator::metrics::setup_metrics();
+
     if let Err(e) = dotenv() {
         println!("Could not load .env: {e}");
     }
@@ -47,9 +49,11 @@ async fn main() {
 
     setup_opentelemetry(&signer.account_id(), "validator");
 
-    let mut validator = validator::Validator::new(signer).await;
+    let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
     tokio::task::spawn(api_main());
 
     validator.run().await;
+
+    opentelemetry::global::shutdown_tracer_provider();
 }

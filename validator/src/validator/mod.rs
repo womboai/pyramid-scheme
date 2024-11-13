@@ -1,19 +1,22 @@
-use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
-use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
-use anyhow::Result;
 use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
 use neuron::{config, AccountId, NeuronInfoLite, Signer, Subtensor};
+
+use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
+use crate::validator::metrics::ValidatorMetrics;
+use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
 use std::random::random;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpmc;
 use std::sync::mpmc::Sender;
+use std::sync::{mpmc, Arc};
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
@@ -21,6 +24,7 @@ use tracing::log::warn;
 use tracing::{error, info};
 
 mod memory_storage;
+pub mod metrics;
 mod neuron_data;
 
 const WEIGHTS_VERSION: u64 = 1;
@@ -136,6 +140,7 @@ pub struct Validator {
     step: u64,
 
     last_metagraph_sync: u64,
+    metrics: Arc<ValidatorMetrics>,
 }
 
 impl Validator {
@@ -172,7 +177,7 @@ impl Validator {
         Self::step_to_grow_to(step).div_ceil(8)
     }
 
-    pub async fn new(signer: Signer) -> Self {
+    pub async fn new(signer: Signer, metrics: Arc<ValidatorMetrics>) -> Self {
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
@@ -232,6 +237,7 @@ impl Validator {
                             neuron_info.uid.0,
                             &info,
                             matches!(state_info.unwrap().score, Score::Cheater),
+                            metrics.clone(),
                         )
                         .into(),
                         info,
@@ -244,6 +250,7 @@ impl Validator {
                             neuron_info.uid.0,
                             &info,
                             false,
+                            metrics.clone(),
                         )
                         .into(),
                         info,
@@ -268,6 +275,7 @@ impl Validator {
             center_column,
             step: state.step,
             last_metagraph_sync,
+            metrics,
         }
     }
 
@@ -360,6 +368,7 @@ impl Validator {
     }
 
     async fn sync(&mut self, block: Option<u64>) -> Result<()> {
+        let start = std::time::Instant::now();
         info!("Syncing metagraph and connecting to miners");
 
         let neurons = self.subtensor.get_neurons(*config::NETUID).await?;
@@ -391,7 +400,14 @@ impl Validator {
 
                 self.neurons[i] = NeuronData {
                     score: Score::default().into(),
-                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false).into(),
+                    connection: Self::connect_to_miner(
+                        &self.signer,
+                        self.uid,
+                        &info,
+                        false,
+                        self.metrics.clone(),
+                    )
+                    .into(),
                     info,
                 };
             } else {
@@ -404,7 +420,8 @@ impl Validator {
                         &self.signer,
                         self.uid,
                         &neurons[i],
-                        matches!(neuron.score.get(), Score::Cheater),
+                        matches!(*neuron.score.get_mut().unwrap(), Score::Cheater),
+                        self.metrics.clone(),
                     )
                     .into()
                 }
@@ -422,7 +439,14 @@ impl Validator {
 
                 NeuronData {
                     score: Score::default().into(),
-                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false).into(),
+                    connection: Self::connect_to_miner(
+                        &self.signer,
+                        self.uid,
+                        &info,
+                        false,
+                        self.metrics.clone(),
+                    )
+                    .into(),
                     info,
                 }
             });
@@ -437,6 +461,9 @@ impl Validator {
             }
         }
 
+        self.metrics
+            .sync_duration
+            .record(start.elapsed().as_secs_f64(), &[]);
         Ok(())
     }
 
@@ -463,6 +490,7 @@ impl Validator {
         end: u64,
         uid: u16,
         completion_events: Sender<ProcessingCompletionResult>,
+        metrics: Arc<ValidatorMetrics>,
     ) {
         let buffer_size = min(end - start, 8 * 4 * 256);
         let mut buffer = Vec::with_capacity(buffer_size as usize);
@@ -594,6 +622,9 @@ impl Validator {
                             &current_row[range.start..range.start + len],
                             &buffer[..len],
                         ) {
+                            info!("{uid} marked as cheater");
+                            metrics.cheater_count.add(1, &[]);
+
                             completion_events
                                 .send(ProcessingCompletionResult {
                                     uid,
@@ -604,6 +635,7 @@ impl Validator {
                             return;
                         }
                     }
+
                     (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                     read += len;
                 }
@@ -625,6 +657,7 @@ impl Validator {
         uid: u16,
         neuron: &NeuronInfoLite,
         cheater: bool,
+        metrics: Arc<ValidatorMetrics>,
     ) -> ConnectionState {
         if cheater {
             return ConnectionState::Unusable;
@@ -683,6 +716,7 @@ impl Validator {
                     return ConnectionState::Unusable;
                 }
 
+                metrics.connected_miners.add(1, &[]);
                 ConnectionState::connected(stream)
             }
             Err(error) => {
@@ -749,6 +783,7 @@ impl Validator {
     }
 
     async fn do_step(&mut self) -> Result<()> {
+        let start = std::time::Instant::now();
         info!("Evolution step {}", self.step);
 
         let current_block = self.subtensor.get_block_number().await?;
@@ -874,6 +909,7 @@ impl Validator {
                             range.end,
                             uid,
                             completion_sender.clone(),
+                            self.metrics.clone(),
                         );
                     }
                 });
@@ -907,6 +943,10 @@ impl Validator {
         self.step += 1;
         self.save_state()?;
 
+        self.metrics.evolution_steps.add(1, &[]);
+        self.metrics
+            .step_duration
+            .record(start.elapsed().as_secs_f64(), &[]);
         Ok(())
     }
 
