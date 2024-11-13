@@ -31,13 +31,11 @@ impl MemoryMappedFile {
 
         let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
 
-        Ok(
-            Self {
-                mmap,
-                file,
-                path: path.as_ref().to_path_buf(),
-            }
-        )
+        Ok(Self {
+            mmap,
+            file,
+            path: path.as_ref().to_path_buf(),
+        })
     }
 }
 

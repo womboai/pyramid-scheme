@@ -1,27 +1,24 @@
+use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
+use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
+use anyhow::Result;
+use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
+use neuron::{config, AccountId, NeuronInfoLite, Signer, Subtensor};
+use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
 use std::random::random;
-use std::sync::mpmc::{self, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpmc;
+use std::sync::mpmc::Sender;
+use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread::sleep;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
-
-use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
-use neuron::{
-    config, hotkey_location, load_key_seed, signer_from_seed, AccountId, NeuronInfoLite, Signer,
-    Subtensor,
-};
-
-use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
-use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
+use tracing::log::warn;
+use tracing::{error, info};
 
 mod memory_storage;
 mod neuron_data;
@@ -91,7 +88,7 @@ struct ValidatorState {
 }
 
 impl ValidatorState {
-    fn for_hotkeys(hotkeys: impl Iterator<Item=AccountId>) -> Self {
+    fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
         let key_info = hotkeys
             .map(|hotkey| KeyScoreInfo {
                 hotkey,
@@ -99,7 +96,11 @@ impl ValidatorState {
             })
             .collect();
 
-        Self { step: 1, key_info, version: Some(DATA_SPEC_VERSION) }
+        Self {
+            step: 1,
+            key_info,
+            version: Some(DATA_SPEC_VERSION),
+        }
     }
 }
 
@@ -171,17 +172,7 @@ impl Validator {
         Self::step_to_grow_to(step).div_ceil(8)
     }
 
-    pub async fn new() -> Self {
-        let hotkey_location = hotkey_location(
-            config::WALLET_PATH.clone(),
-            &*config::WALLET_NAME,
-            &*config::HOTKEY_NAME,
-        );
-
-        let seed = load_key_seed(&hotkey_location).unwrap();
-
-        let signer = signer_from_seed(&seed).unwrap();
-
+    pub async fn new(signer: Signer) -> Self {
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
@@ -195,7 +186,8 @@ impl Validator {
             Self::not_registered(signer.account_id());
         };
 
-        let mut state = Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
+        let mut state =
+            Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
 
         let valid_state = if let Some(version) = state.version {
             version == DATA_SPEC_VERSION
@@ -212,17 +204,14 @@ impl Validator {
             state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
         }
 
-        let mut current_row = CurrentRow::open(
-            CURRENT_ROW_FILE,
-            Self::current_row_file_size(state.step),
-        )
-            .unwrap();
+        let mut current_row =
+            CurrentRow::open(CURRENT_ROW_FILE, Self::current_row_file_size(state.step)).unwrap();
 
         let mut center_column = MemoryMappedFile::open(
             CENTER_COLUMN_FILE,
             Self::center_column_file_size(state.step),
         )
-            .unwrap();
+        .unwrap();
 
         if state.step == 1 {
             // Initial state
@@ -233,18 +222,30 @@ impl Validator {
         let mut neurons = neurons
             .into_iter()
             .map(|info| {
-                let state_info = &state.key_info[info.uid.0 as usize];
+                let state_info = &state.key_info.get(info.uid.0 as usize);
 
-                if state_info.hotkey == info.hotkey {
+                if state_info.is_some() && state_info.unwrap().hotkey == info.hotkey {
                     NeuronData {
-                        score: state_info.score.into(),
-                        connection: Self::connect_to_miner(&signer, neuron_info.uid.0, &info, matches!(state_info.score, Score::Cheater)).into(),
+                        score: state_info.unwrap().score.into(),
+                        connection: Self::connect_to_miner(
+                            &signer,
+                            neuron_info.uid.0,
+                            &info,
+                            matches!(state_info.unwrap().score, Score::Cheater),
+                        )
+                        .into(),
                         info,
                     }
                 } else {
                     NeuronData {
                         score: Score::default().into(),
-                        connection: Self::connect_to_miner(&signer, neuron_info.uid.0, &info, false).into(),
+                        connection: Self::connect_to_miner(
+                            &signer,
+                            neuron_info.uid.0,
+                            &info,
+                            false,
+                        )
+                        .into(),
                         info,
                     }
                 }
@@ -300,7 +301,7 @@ impl Validator {
         Ok(())
     }
 
-    fn load_state(hotkeys: impl Iterator<Item=AccountId>) -> Result<ValidatorState> {
+    fn load_state(hotkeys: impl Iterator<Item = AccountId>) -> Result<ValidatorState> {
         info!("Loading state");
 
         let path = PathBuf::from(STATE_DATA_FILE);
@@ -314,7 +315,11 @@ impl Validator {
         Ok(serde_json::from_str(&json)?)
     }
 
-    async fn set_weights(neurons: &mut [NeuronData], subtensor: &Subtensor, signer: &Signer) -> Result<()> {
+    async fn set_weights(
+        neurons: &mut [NeuronData],
+        subtensor: &Subtensor,
+        signer: &Signer,
+    ) -> Result<()> {
         if neurons.is_empty() {
             return Ok(());
         }
@@ -329,11 +334,13 @@ impl Validator {
 
         let scores = neurons.iter_mut().map(|neuron| {
             let normalized_score = match *neuron.score.get_mut().unwrap() {
-                Score::Legitimate(score) => if max_score == 0 {
-                    u16::MAX
-                } else {
-                    ((score * u16::MAX as u128) / max_score) as u16
-                },
+                Score::Legitimate(score) => {
+                    if max_score == 0 {
+                        u16::MAX
+                    } else {
+                        ((score * u16::MAX as u128) / max_score) as u16
+                    }
+                }
                 Score::Cheater => 0,
             };
 
@@ -341,7 +348,12 @@ impl Validator {
         });
 
         subtensor
-            .set_weights(&signer, *config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION)
+            .set_weights(
+                &signer,
+                *config::NETUID,
+                scores,
+                DATA_SPEC_VERSION + WEIGHTS_VERSION,
+            )
             .await?;
 
         Ok(())
@@ -383,8 +395,18 @@ impl Validator {
                     info,
                 };
             } else {
-                if matches!(neuron.connection.get_mut().unwrap(), ConnectionState::Disconnected) || neurons[i].axon_info != neuron.info.axon_info {
-                    neuron.connection = Self::connect_to_miner(&self.signer, self.uid, &neurons[i], matches!(*neuron.score.get_mut().unwrap(), Score::Cheater)).into()
+                if matches!(
+                    neuron.connection.get_mut().unwrap(),
+                    ConnectionState::Disconnected
+                ) || neurons[i].axon_info != neuron.info.axon_info
+                {
+                    neuron.connection = Self::connect_to_miner(
+                        &self.signer,
+                        self.uid,
+                        &neurons[i],
+                        matches!(neuron.score.get(), Score::Cheater),
+                    )
+                    .into()
                 }
 
                 neuron.info = neurons[i].clone();
@@ -408,7 +430,9 @@ impl Validator {
 
         // Set weights if enough time has passed
         if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            if let Err(e) = Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await {
+            if let Err(e) =
+                Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await
+            {
                 error!("Failed to set weights. {e}");
             }
         }
@@ -443,9 +467,7 @@ impl Validator {
         let buffer_size = min(end - start, 8 * 4 * 256);
         let mut buffer = Vec::with_capacity(buffer_size as usize);
 
-        unsafe {
-            buffer.set_len(buffer_size as usize)
-        }
+        unsafe { buffer.set_len(buffer_size as usize) }
 
         let iterations = (end - start).div_ceil(buffer_size);
 
@@ -478,10 +500,15 @@ impl Validator {
                                 "Failed to write to miner {uid} connection while there's more to process"
                             );
 
-                            completion_events.send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Failed(processed, start + processed..end),
-                            }).unwrap();
+                            completion_events
+                                .send(ProcessingCompletionResult {
+                                    uid,
+                                    state: ProcessingCompletionState::Failed(
+                                        processed,
+                                        start + processed..end,
+                                    ),
+                                })
+                                .unwrap();
 
                             return;
                         }
@@ -491,10 +518,15 @@ impl Validator {
                     Err(error) => {
                         warn!("Error occurred writing to miner {uid}: {error}");
 
-                        completion_events.send(ProcessingCompletionResult {
-                            uid,
-                            state: ProcessingCompletionState::Failed(processed, start + processed..end),
-                        }).unwrap();
+                        completion_events
+                            .send(ProcessingCompletionResult {
+                                uid,
+                                state: ProcessingCompletionState::Failed(
+                                    processed,
+                                    start + processed..end,
+                                ),
+                            })
+                            .unwrap();
 
                         return;
                     }
@@ -503,29 +535,34 @@ impl Validator {
                 let mut read = 0;
 
                 while read < written {
-                    let range = from + read + processed as usize..from + written + processed as usize;
+                    let range =
+                        from + read + processed as usize..from + written + processed as usize;
 
-                    let should_validate = if let Some(validation_start_index) =
-                        validation_start_index
-                    {
-                        if range.contains(&(validation_start_index as usize)) {
-                            true
+                    let should_validate =
+                        if let Some(validation_start_index) = validation_start_index {
+                            if range.contains(&(validation_start_index as usize)) {
+                                true
+                            } else {
+                                false
+                            }
                         } else {
                             false
-                        }
-                    } else {
-                        false
-                    };
+                        };
 
                     let len = match connection.read(&mut buffer[0..range.len()]) {
                         Ok(len) => {
                             if len == 0 {
                                 warn!("Failed to read from miner {uid} connection");
 
-                                completion_events.send(ProcessingCompletionResult {
-                                    uid,
-                                    state: ProcessingCompletionState::Failed(processed, start + processed..end),
-                                }).unwrap();
+                                completion_events
+                                    .send(ProcessingCompletionResult {
+                                        uid,
+                                        state: ProcessingCompletionState::Failed(
+                                            processed,
+                                            start + processed..end,
+                                        ),
+                                    })
+                                    .unwrap();
 
                                 return;
                             }
@@ -535,10 +572,15 @@ impl Validator {
                         Err(error) => {
                             warn!("Error occurred reading from miner {uid}: {error}");
 
-                            completion_events.send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Failed(processed, start + processed..end),
-                            }).unwrap();
+                            completion_events
+                                .send(ProcessingCompletionResult {
+                                    uid,
+                                    state: ProcessingCompletionState::Failed(
+                                        processed,
+                                        start + processed..end,
+                                    ),
+                                })
+                                .unwrap();
 
                             return;
                         }
@@ -548,19 +590,20 @@ impl Validator {
 
                     if should_validate {
                         info!("Verifying results of {uid}");
-
-                        if !Self::verify_result(&current_row[read_chunk_range.clone()], &buffer[..len]) {
-                            info!("{uid} marked as cheater");
-
-                            completion_events.send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Cheated(start..end),
-                            }).unwrap();
+                        if !Self::verify_result(
+                            &current_row[range.start..range.start + len],
+                            &buffer[..len],
+                        ) {
+                            completion_events
+                                .send(ProcessingCompletionResult {
+                                    uid,
+                                    state: ProcessingCompletionState::Cheated(start..end),
+                                })
+                                .unwrap();
 
                             return;
                         }
                     }
-
                     (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                     read += len;
                 }
@@ -569,13 +612,20 @@ impl Validator {
             }
         }
 
-        completion_events.send(ProcessingCompletionResult {
-            uid,
-            state: ProcessingCompletionState::Completed(processed),
-        }).unwrap();
+        completion_events
+            .send(ProcessingCompletionResult {
+                uid,
+                state: ProcessingCompletionState::Completed(processed),
+            })
+            .unwrap();
     }
 
-    fn connect_to_miner(signer: &Signer, uid: u16, neuron: &NeuronInfoLite, cheater: bool) -> ConnectionState {
+    fn connect_to_miner(
+        signer: &Signer,
+        uid: u16,
+        neuron: &NeuronInfoLite,
+        cheater: bool,
+    ) -> ConnectionState {
         if cheater {
             return ConnectionState::Unusable;
         }
@@ -650,7 +700,10 @@ impl Validator {
         let mut count = 0;
 
         for x in self.neurons.iter_mut() {
-            if matches!(x.connection.get_mut().unwrap(), ConnectionState::Connected { .. }) {
+            if matches!(
+                x.connection.get_mut().unwrap(),
+                ConnectionState::Connected { .. }
+            ) {
                 count += 1;
             }
         }
@@ -658,18 +711,25 @@ impl Validator {
         count
     }
 
-    fn find_suitable_connection<'a, 'b>(&'a self) -> (u16, ConnectionGuard<'b>) where 'a: 'b {
-        let free_connection = self.neurons.iter().enumerate().find_map(|(uid, &ref neuron)| {
-            if let Some(mut guard) = neuron.connection.try_lock().ok() {
-                if let ConnectionState::Connected { free: true, .. } = &mut *guard {
-                    Some((uid as u16, ConnectionGuard::<'b>::new(guard)))
+    fn find_suitable_connection<'a, 'b>(&'a self) -> (u16, ConnectionGuard<'b>)
+    where
+        'a: 'b,
+    {
+        let free_connection = self
+            .neurons
+            .iter()
+            .enumerate()
+            .find_map(|(uid, &ref neuron)| {
+                if let Some(mut guard) = neuron.connection.try_lock().ok() {
+                    if let ConnectionState::Connected { free: true, .. } = &mut *guard {
+                        Some((uid as u16, ConnectionGuard::<'b>::new(guard)))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        });
+            });
 
         if let Some(result) = free_connection {
             return result;
@@ -698,8 +758,10 @@ impl Validator {
             self.sync(Some(current_block)).await?;
         }
 
-        self.current_row.ensure_capacity(Self::current_row_file_size(self.step))?;
-        self.center_column.ensure_capacity(Self::center_column_file_size(self.step))?;
+        self.current_row
+            .ensure_capacity(Self::current_row_file_size(self.step))?;
+        self.center_column
+            .ensure_capacity(Self::center_column_file_size(self.step))?;
 
         let connection_count = self.worker_count_hint() as u64;
         info!("Splitting work into {connection_count} chunks");
@@ -725,7 +787,9 @@ impl Validator {
             let range = start..end;
 
             info!("Adding {range:?} to work queue");
-            work_queue_sender.send(range).expect("Work queue channel should not be closed");
+            work_queue_sender
+                .send(range)
+                .expect("Work queue channel should not be closed");
         }
 
         let data_processed = AtomicU64::new(0);
@@ -735,7 +799,9 @@ impl Validator {
 
             let _handle = scope.spawn(|| {
                 while data_processed.load(Ordering::Relaxed) < byte_count {
-                    let Ok(event): Result<ProcessingCompletionResult, _> = completion_receiver.try_recv() else {
+                    let Ok(event): Result<ProcessingCompletionResult, _> =
+                        completion_receiver.try_recv()
+                    else {
                         sleep(Duration::from_millis(100));
                         continue;
                     };
@@ -755,19 +821,25 @@ impl Validator {
                         ProcessingCompletionState::Failed(processed, remaining) => {
                             info!("Miner {uid} failed at assigned work");
 
-                            *self.neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Disconnected;
+                            *self.neurons[uid as usize].connection.lock().unwrap() =
+                                ConnectionState::Disconnected;
                             data_processed.fetch_add(processed, Ordering::Relaxed);
                             *score += processed as u128;
 
-                            work_queue_sender.send(remaining).expect("Work queue channel should not be closed");
+                            work_queue_sender
+                                .send(remaining)
+                                .expect("Work queue channel should not be closed");
                         }
                         ProcessingCompletionState::Cheated(range) => {
                             info!("Miner {uid} marked as cheater");
 
-                            *self.neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Unusable;
+                            *self.neurons[uid as usize].connection.lock().unwrap() =
+                                ConnectionState::Unusable;
                             *score = Score::Cheater;
 
-                            work_queue_sender.send(range).expect("Work queue channel should not be closed");
+                            work_queue_sender
+                                .send(range)
+                                .expect("Work queue channel should not be closed");
                         }
                     }
                 }
@@ -795,7 +867,14 @@ impl Validator {
 
                         info!("Assigned {range:?} to miner {uid}");
 
-                        Self::handle_connection(self.current_row.inner_mut(), connection, range.start, range.end, uid, completion_sender.clone());
+                        Self::handle_connection(
+                            self.current_row.inner_mut(),
+                            connection,
+                            range.start,
+                            range.end,
+                            uid,
+                            completion_sender.clone(),
+                        );
                     }
                 });
 
@@ -811,7 +890,7 @@ impl Validator {
             }
 
             let [a, b] = self.current_row[end..end + 1] else {
-                break
+                break;
             };
 
             let (a, b) = Self::normalize_pair(a, b);

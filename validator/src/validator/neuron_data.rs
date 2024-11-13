@@ -1,5 +1,5 @@
-use std::marker::PhantomData;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, RwLock};
@@ -45,10 +45,7 @@ impl AddAssign<u128> for Score {
 }
 
 pub enum ConnectionState {
-    Connected {
-        stream: TcpStream,
-        free: bool,
-    },
+    Connected { stream: TcpStream, free: bool },
     Disconnected,
     Unusable,
 }
@@ -72,7 +69,10 @@ impl<'a> ConnectionGuard<'a> {
             panic!("Tried to initialize connection guard out of a non-connected state")
         }
 
-        Self { guard, phantom: PhantomData }
+        Self {
+            guard,
+            phantom: PhantomData,
+        }
     }
 }
 

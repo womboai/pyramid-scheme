@@ -1,9 +1,8 @@
-use neuron::{AxonProtocol, config, hotkey_location, load_key_seed, signer_from_seed, Subtensor};
+use neuron::{config, hotkey_location, load_key_seed, signer_from_seed, AxonProtocol, Subtensor};
 use std::net::IpAddr;
 
 use clap::Parser;
 use dotenv::dotenv;
-use tracing::warn;
 
 #[derive(Parser)]
 struct Cli {
@@ -14,7 +13,7 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     if let Err(e) = dotenv() {
-        warn!("Could not load .env: {e}");
+        println!("Could not load .env: {e}");
     }
 
     let args: Cli = Cli::parse();

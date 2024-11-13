@@ -13,7 +13,6 @@ anyhow = { workspace = true }
 
 dirs = { workspace = true }
 
-tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 
 threadpool = { workspace = true }
@@ -24,12 +23,6 @@ serde_json = { workspace = true }
 dotenv = { workspace = true }
 
 thiserror = { workspace = true }
-
-opentelemetry = { workspace = true }
-opentelemetry-appender-tracing = { workspace = true }
-opentelemetry-stdout = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-opentelemetry-otlp = { workspace = true }
 
 memmap2 = "0.9.5"
 axum = "0.7.7"

@@ -4,19 +4,19 @@ use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
-use std::{io, slice};
 use std::time::{Duration, Instant};
+use std::{io, slice};
 
+use crate::signature_checking::info_matches;
 use anyhow::Result;
 use dotenv::dotenv;
-use threadpool::ThreadPool;
-use tracing::{error, info, warn};
-use tracing_subscriber::{EnvFilter, fmt};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
-use neuron::{config, hotkey_location, load_key_account_id, AccountId, NeuronInfoLite, Subtensor};
-use crate::signature_checking::info_matches;
+use neuron::{
+    config, hotkey_location, load_key_account_id, setup_opentelemetry, AccountId, NeuronInfoLite,
+    Subtensor,
+};
+use threadpool::ThreadPool;
+use tracing::{error, info};
 
 mod signature_checking;
 
@@ -102,13 +102,21 @@ impl Solver {
                 self.solve_chunked::<2>(data_u8);
             }
 
-            self.solve(data, offset + read_len - read_len % (8 * 2), read_len % (8 * 2));
+            self.solve(
+                data,
+                offset + read_len - read_len % (8 * 2),
+                read_len % (8 * 2),
+            );
         } else {
             unsafe {
                 self.solve_chunked::<4>(data_u8);
             }
 
-            self.solve(data, offset + read_len - read_len % (8 * 4), read_len % (8 * 4));
+            self.solve(
+                data,
+                offset + read_len - read_len % (8 * 4),
+                read_len % (8 * 4),
+            );
         }
     }
 }
@@ -117,11 +125,10 @@ fn read<T>(stream: &mut TcpStream) -> io::Result<T> {
     let mut data = MaybeUninit::<T>::uninit();
 
     unsafe {
-        stream
-            .read(slice::from_raw_parts_mut(
-                data.as_mut_ptr() as *mut u8,
-                size_of::<T>(),
-            ))?;
+        stream.read(slice::from_raw_parts_mut(
+            data.as_mut_ptr() as *mut u8,
+            size_of::<T>(),
+        ))?;
 
         Ok(data.assume_init())
     }
@@ -190,14 +197,7 @@ struct Miner {
 }
 
 impl Miner {
-    async fn new() -> Self {
-        let hotkey_location = hotkey_location(
-            config::WALLET_PATH.clone(),
-            &*config::WALLET_NAME,
-            &*config::HOTKEY_NAME,
-        );
-        let account_id = load_key_account_id(&hotkey_location).unwrap();
-
+    async fn new(account_id: AccountId) -> Self {
         let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
 
         let current_block = subtensor.get_block_number().await.unwrap();
@@ -300,36 +300,31 @@ impl Miner {
 #[tokio::main]
 async fn main() {
     if let Err(e) = dotenv() {
-        warn!("Could not load .env: {e}");
+        println!("Could not load .env: {e}");
     }
 
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+    let hotkey_location = hotkey_location(
+        config::WALLET_PATH.clone(),
+        &*config::WALLET_NAME,
+        &*config::HOTKEY_NAME,
+    );
 
-    let fmt = fmt::layer()
-        .with_line_number(true)
-        .with_thread_ids(true);
+    let account_id = load_key_account_id(&hotkey_location).unwrap();
 
-    tracing_subscriber::registry()
-        .with(fmt)
-        .with(filter_layer)
-        .init();
+    setup_opentelemetry(&account_id, "miner");
 
-    info!("Starting miner v{}", env!("CARGO_PKG_VERSION"));
-
-    let mut miner = Miner::new().await;
+    let mut miner = Miner::new(account_id).await;
 
     miner.run(*config::PORT).await;
 }
 
 #[cfg(test)]
 mod test {
-    use std::simd::u64x4;
+    use crate::{as_u8, AlignedChunk, Solver};
     use num_bigint::{BigInt, Sign};
-    use crate::{AlignedChunk, as_u8, Solver};
+    use std::simd::u64x4;
 
-    const STEPS: u64 = 1_000_000;
+    const STEPS: u64 = u16::MAX as u64;
 
     #[test]
     fn ensure_accurate_solver() {
@@ -349,7 +344,10 @@ mod test {
 
             expected ^= expected.clone() << 1 | expected.clone() << 2;
 
-            assert_eq!(&expected.to_bytes_le().1, &as_u8(&result)[..byte_count as usize]);
+            assert_eq!(
+                &expected.to_bytes_le().1,
+                &as_u8(&result)[..byte_count as usize]
+            );
         }
     }
 }

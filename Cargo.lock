@@ -8140,17 +8140,11 @@ dependencies = [
  "clap",
  "dotenv",
  "num-bigint",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
  "rule-30-solver-neuron",
  "thiserror",
  "threadpool",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -8160,6 +8154,11 @@ dependencies = [
  "anyhow",
  "dirs",
  "hex",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
  "parity-scale-codec",
  "serde",
  "serde_json",
@@ -8170,6 +8169,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -8184,11 +8184,6 @@ dependencies = [
  "dirs",
  "dotenv",
  "memmap2",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
  "rule-30-solver-neuron",
  "serde",
  "serde_json",
@@ -8196,7 +8191,6 @@ dependencies = [
  "threadpool",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

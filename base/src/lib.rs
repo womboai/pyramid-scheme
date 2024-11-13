@@ -7,17 +7,27 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use hex;
+use opentelemetry::{KeyValue, Value as LogValue};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::logs::LoggerProvider;
+use opentelemetry_sdk::Resource;
 use parity_scale_codec::{Compact, Decode};
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 use subxt::client::OnlineClient;
 use subxt::ext::sp_core::{sr25519, Pair};
 use subxt::tx::PairSigner;
 use subxt::{Config, SubstrateConfig};
 use thiserror::Error;
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 pub mod auth;
 pub mod config;
+
+const OPENTELEMETRY_EXPORT_ENDPOINT: &'static str = "http://18.215.170.244:4317";
 
 include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 
@@ -108,7 +118,7 @@ impl Display for AxonProtocol {
         let display = match self {
             AxonProtocol::Tcp => "TCP:0",
             AxonProtocol::Udp => "UDP:1",
-            AxonProtocol::Other => "TCP/UDP:4"
+            AxonProtocol::Other => "TCP/UDP:4",
         };
 
         f.write_str(display)
@@ -128,7 +138,7 @@ pub fn hotkey_location(
 }
 
 pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
-    let json: Value = serde_json::from_reader(File::open(&path)?)?;
+    let json: JsonValue = serde_json::from_reader(File::open(&path)?)?;
 
     let seed = json
         .as_object()
@@ -145,7 +155,7 @@ pub fn load_key_seed(path: impl AsRef<Path>) -> Result<[u8; 32]> {
 }
 
 pub fn load_key_account_id(path: impl AsRef<Path>) -> Result<AccountId> {
-    let json: Value = serde_json::from_reader(File::open(&path)?)?;
+    let json: JsonValue = serde_json::from_reader(File::open(&path)?)?;
 
     let seed = json
         .as_object()
@@ -163,6 +173,41 @@ pub fn load_key_account_id(path: impl AsRef<Path>) -> Result<AccountId> {
 
 pub fn signer_from_seed(seed: &[u8]) -> Result<Signer> {
     Ok(Signer::new(sr25519::Pair::from_seed_slice(seed)?))
+}
+
+pub fn setup_opentelemetry(account_id: &AccountId, neuron_type: &'static str) {
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    let exporter_builder = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT);
+
+    let provider: LoggerProvider = LoggerProvider::builder()
+        .with_resource(Resource::new(vec![
+            KeyValue::new("service.name", "pyramid-scheme"),
+            KeyValue::new("neuron.type", neuron_type),
+            KeyValue::new("netuid", LogValue::I64(*config::NETUID as i64)),
+            KeyValue::new("neuron.hotkey", account_id.to_string()),
+        ]))
+        .with_batch_exporter(
+            exporter_builder.build_log_exporter().unwrap(),
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
+
+    let otel = OpenTelemetryTracingBridge::new(&provider);
+
+    let fmt = fmt::layer().with_line_number(true).with_thread_ids(true);
+
+    tracing_subscriber::registry()
+        .with(fmt)
+        .with(filter_layer)
+        .with(otel)
+        .init();
+
+    info!("Starting {} v{}", neuron_type, env!("CARGO_PKG_VERSION"));
 }
 
 impl Subtensor {
@@ -201,12 +246,10 @@ impl Subtensor {
     ) -> Result<()> {
         let (uids, weights): (Vec<_>, Vec<_>) = weights.unzip();
 
-        let set_weights_payload = api::tx().subtensor_module().set_weights(
-            netuid,
-            uids,
-            weights,
-            version_key,
-        );
+        let set_weights_payload =
+            api::tx()
+                .subtensor_module()
+                .set_weights(netuid, uids, weights, version_key);
 
         self.client
             .tx()
