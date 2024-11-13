@@ -1,8 +1,8 @@
 use opentelemetry::metrics::{Counter, Histogram, Meter};
-use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::Config;
 use opentelemetry_sdk::metrics::reader::DefaultTemporalitySelector;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_sdk::trace::Config;
 use std::sync::Arc;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &str = "http://18.215.170.244:4317";
@@ -23,7 +23,7 @@ impl ValidatorMetrics {
                 .u64_counter("evolution_steps")
                 .with_description("Total number of evolution steps completed")
                 .init(),
-            
+
             connected_miners: meter
                 .u64_counter("connected_miners")
                 .with_description("Number of miners currently connected")
@@ -54,7 +54,7 @@ pub fn setup_metrics() -> Arc<ValidatorMetrics> {
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .tonic()
-                .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT)
+                .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT),
         )
         .with_trace_config(Config::default())
         .install_batch(opentelemetry_sdk::runtime::Tokio)
@@ -69,16 +69,15 @@ pub fn setup_metrics() -> Arc<ValidatorMetrics> {
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(
         exporter,
-        opentelemetry_sdk::runtime::Tokio
-    ).build();
+        opentelemetry_sdk::runtime::Tokio,
+    )
+    .build();
 
-    let provider = SdkMeterProvider::builder()
-        .with_reader(reader)
-        .build();
+    let provider = SdkMeterProvider::builder().with_reader(reader).build();
 
     // Set as global provider
     opentelemetry::global::set_meter_provider(provider);
-    
+
     // Use global meter
     let meter = opentelemetry::global::meter("rule_30_validator");
     Arc::new(ValidatorMetrics::new(meter))

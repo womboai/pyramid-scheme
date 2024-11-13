@@ -24,8 +24,8 @@ use tracing::log::warn;
 use tracing::{error, info};
 
 mod memory_storage;
-mod neuron_data;
 pub mod metrics;
+mod neuron_data;
 
 const WEIGHTS_VERSION: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
@@ -400,7 +400,14 @@ impl Validator {
 
                 self.neurons[i] = NeuronData {
                     score: Score::default().into(),
-                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false, self.metrics.clone()).into(),
+                    connection: Self::connect_to_miner(
+                        &self.signer,
+                        self.uid,
+                        &info,
+                        false,
+                        self.metrics.clone(),
+                    )
+                    .into(),
                     info,
                 };
             } else {
@@ -432,7 +439,14 @@ impl Validator {
 
                 NeuronData {
                     score: Score::default().into(),
-                    connection: Self::connect_to_miner(&self.signer, self.uid, &info, false, self.metrics.clone()).into(),
+                    connection: Self::connect_to_miner(
+                        &self.signer,
+                        self.uid,
+                        &info,
+                        false,
+                        self.metrics.clone(),
+                    )
+                    .into(),
                     info,
                 }
             });
@@ -447,7 +461,9 @@ impl Validator {
             }
         }
 
-        self.metrics.sync_duration.record(start.elapsed().as_secs_f64(), &[]);
+        self.metrics
+            .sync_duration
+            .record(start.elapsed().as_secs_f64(), &[]);
         Ok(())
     }
 
@@ -928,7 +944,9 @@ impl Validator {
         self.save_state()?;
 
         self.metrics.evolution_steps.add(1, &[]);
-        self.metrics.step_duration.record(start.elapsed().as_secs_f64(), &[]);
+        self.metrics
+            .step_duration
+            .record(start.elapsed().as_secs_f64(), &[]);
         Ok(())
     }
 
