@@ -1,4 +1,4 @@
-use opentelemetry::metrics::{Counter, Histogram, Meter};
+use opentelemetry::metrics::{Counter, Histogram, Meter, UpDownCounter, Gauge};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::metrics::reader::DefaultTemporalitySelector;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -9,8 +9,8 @@ const OPENTELEMETRY_EXPORT_ENDPOINT: &str = "http://18.215.170.244:4317";
 
 #[derive(Clone)]
 pub struct ValidatorMetrics {
-    pub evolution_steps: Counter<u64>,
-    pub connected_miners: Counter<u64>,
+    pub evolution_steps: Gauge<u64>,
+    pub connected_miners: UpDownCounter<i64>,
     pub cheater_count: Counter<u64>,
     pub step_duration: Histogram<f64>,
     pub sync_duration: Histogram<f64>,
@@ -20,12 +20,12 @@ impl ValidatorMetrics {
     pub fn new(meter: Meter) -> Self {
         Self {
             evolution_steps: meter
-                .u64_counter("evolution_steps")
-                .with_description("Total number of evolution steps completed")
+                .u64_gauge("evolution_steps")
+                .with_description("Current evolution step")
                 .init(),
 
             connected_miners: meter
-                .u64_counter("connected_miners")
+                .i64_up_down_counter("connected_miners")
                 .with_description("Number of miners currently connected")
                 .init(),
 

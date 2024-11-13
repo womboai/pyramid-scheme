@@ -858,6 +858,7 @@ impl Validator {
 
                             *self.neurons[uid as usize].connection.lock().unwrap() =
                                 ConnectionState::Disconnected;
+                            self.metrics.connected_miners.add(-1, &[]);
                             data_processed.fetch_add(processed, Ordering::Relaxed);
                             *score += processed as u128;
 
@@ -870,6 +871,7 @@ impl Validator {
 
                             *self.neurons[uid as usize].connection.lock().unwrap() =
                                 ConnectionState::Unusable;
+                            self.metrics.connected_miners.add(-1, &[]);
                             *score = Score::Cheater;
 
                             work_queue_sender
@@ -943,7 +945,7 @@ impl Validator {
         self.step += 1;
         self.save_state()?;
 
-        self.metrics.evolution_steps.add(1, &[]);
+        self.metrics.evolution_steps.record(self.step, &[]);
         self.metrics
             .step_duration
             .record(start.elapsed().as_secs_f64(), &[]);
