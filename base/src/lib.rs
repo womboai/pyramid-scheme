@@ -196,13 +196,15 @@ impl Subtensor {
         &self,
         signer: &Signer,
         netuid: u16,
-        weights: impl Iterator<Item = (u16, u16)> + Clone,
+        weights: impl Iterator<Item = (u16, u16)>,
         version_key: u64,
     ) -> Result<()> {
+        let (uids, weights): (Vec<_>, Vec<_>) = weights.unzip();
+
         let set_weights_payload = api::tx().subtensor_module().set_weights(
             netuid,
-            weights.clone().map(|(uid, _)| uid).collect(),
-            weights.map(|(_, weight)| weight).collect(),
+            uids,
+            weights,
             version_key,
         );
 

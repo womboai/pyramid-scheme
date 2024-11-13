@@ -1,9 +1,8 @@
-use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
-use std::net::TcpStream;
-use std::ops::{Add, AddAssign, Deref};
-
 use serde::{Deserialize, Serialize};
+use std::net::TcpStream;
+use std::ops::{Add, AddAssign, Deref, DerefMut};
+use std::sync::{Mutex, MutexGuard, RwLock};
 
 use neuron::NeuronInfoLite;
 
@@ -12,9 +11,6 @@ pub enum Score {
     Legitimate(u128),
     Cheater,
 }
-
-unsafe impl Sync for Score {}
-unsafe impl Send for Score {}
 
 impl Default for Score {
     fn default() -> Self {
@@ -42,50 +38,72 @@ impl Add<u128> for Score {
     }
 }
 
-pub struct UnsafeSendRef<'a, T>(&'a T, PhantomData<T>) where T : ?Sized;
-
-impl<'a, T> Clone for UnsafeSendRef<'a, T> where T : ?Sized {
-    fn clone(&self) -> Self {
-        Self(self.0, PhantomData::default())
-    }
-}
-
-unsafe impl<'a, T> Send for UnsafeSendRef<'a, T> where T : ?Sized {}
-
-impl<'a, T> From<&'a T> for UnsafeSendRef<'a, T> where T : ?Sized {
-    fn from(value: &'a T) -> Self {
-        Self(value, PhantomData::default())
-    }
-}
-
-impl<'a, T> Deref for UnsafeSendRef<'a, T> where T : ?Sized {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
 impl AddAssign<u128> for Score {
     fn add_assign(&mut self, rhs: u128) {
-        *self = *self + rhs
+        *self = self.add(rhs);
+    }
+}
+
+pub enum ConnectionState {
+    Connected {
+        stream: TcpStream,
+        free: bool,
+    },
+    Disconnected,
+    Unusable,
+}
+
+impl ConnectionState {
+    pub fn connected(stream: TcpStream) -> Self {
+        Self::Connected { stream, free: true }
+    }
+}
+
+pub struct ConnectionGuard<'a> {
+    guard: MutexGuard<'a, ConnectionState>,
+    phantom: PhantomData<&'a mut TcpStream>,
+}
+
+impl<'a> ConnectionGuard<'a> {
+    pub fn new(mut guard: MutexGuard<'a, ConnectionState>) -> Self {
+        if let ConnectionState::Connected { free, .. } = &mut *guard {
+            *free = false;
+        } else {
+            panic!("Tried to initialize connection guard out of a non-connected state")
+        }
+
+        Self { guard, phantom: PhantomData }
+    }
+}
+
+impl Deref for ConnectionGuard<'_> {
+    type Target = TcpStream;
+
+    fn deref(&self) -> &Self::Target {
+        let ConnectionState::Connected { stream, .. } = &*self.guard else {
+            unreachable!();
+        };
+
+        stream
+    }
+}
+
+impl DerefMut for ConnectionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let ConnectionState::Connected { stream, .. } = &mut *self.guard else {
+            unreachable!();
+        };
+
+        stream
     }
 }
 
 pub struct NeuronData {
     pub info: NeuronInfoLite,
 
-    // Allow (non-shared) mutation in computation thread, not RefCell to avoid runtime borrow overhead
-    pub score: Cell<Score>,
-    pub connection: UnsafeCell<Option<TcpStream>>,
+    pub score: RwLock<Score>,
+    pub connection: Mutex<ConnectionState>,
 }
 
-pub trait UnsafeCellImmutableBorrow<T> {
-    fn as_ref(&self) -> &T;
-}
-
-impl<T> UnsafeCellImmutableBorrow<T> for UnsafeCell<T> {
-    fn as_ref(&self) -> &T {
-        unsafe { &*self.get() }
-    }
-}
+unsafe impl Send for NeuronData {}
+unsafe impl Sync for NeuronData {}
