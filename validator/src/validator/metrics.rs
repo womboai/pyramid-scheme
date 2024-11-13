@@ -1,9 +1,9 @@
-use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider};
+use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_otlp::{WithExportConfig};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace::Config;
+use opentelemetry_sdk::metrics::reader::DefaultTemporalitySelector;
 use std::sync::Arc;
-use opentelemetry::sdk::trace::Config;
-use opentelemetry::trace::TracerProvider;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &str = "http://18.215.170.244:4317";
 
@@ -64,7 +64,7 @@ pub fn setup_metrics() -> Arc<ValidatorMetrics> {
     let exporter = opentelemetry_otlp::new_exporter()
         .tonic()
         .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT)
-        .build_metrics_exporter()
+        .build_metrics_exporter(Box::new(DefaultTemporalitySelector::default()))
         .unwrap();
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(
@@ -82,9 +82,4 @@ pub fn setup_metrics() -> Arc<ValidatorMetrics> {
     // Use global meter
     let meter = opentelemetry::global::meter("rule_30_validator");
     Arc::new(ValidatorMetrics::new(meter))
-}
-
-// Don't forget cleanup on shutdown
-pub fn shutdown_tracer() {
-    opentelemetry::global::shutdown_tracer_provider();
 }
