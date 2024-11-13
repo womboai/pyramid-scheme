@@ -771,7 +771,19 @@ impl Validator {
 
         info!("No suitable miners found, reconnecting");
 
-        panic!()
+        for (uid, neuron) in self.neurons.iter().enumerate() {
+            if let Ok(guard) = neuron.connection.try_lock() {
+                if let ConnectionState::Disconnected = &*guard {
+                    *guard = Self::connect_to_miner(&self.signer, uid as u16, &neuron.info, false, self.metrics.clone());
+
+                    if matches!(*guard, ConnectionState::Connected { .. }) {
+                        return (uid as u16, ConnectionGuard::<'b>::new(guard));
+                    }
+                }
+            }
+        }
+
+        panic!("No suitable miners remaining for this step, crashing to revert to a previous state.");
     }
 
     fn release_connection(&self, uid: u16) {
