@@ -1,4 +1,4 @@
-use neuron::{AxonProtocol, config, hotkey_location, load_key_seed, signer_from_seed, Subtensor};
+use neuron::{config, hotkey_location, load_key_seed, signer_from_seed, AxonProtocol, Subtensor};
 use std::net::IpAddr;
 
 use clap::Parser;
