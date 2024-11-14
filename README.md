@@ -82,6 +82,17 @@ To solve the fundamental questions posed by Wolfram, our subnet coordinates vali
 **Validators:** distribute computational tasks and verify results. Since Rule 30 is deterministic, validation is straightforward - each computation has exactly one correct answer. Validators check accuracy, measure response time, and reward miners accordingly.
 
 ## Running a miner or validator
+Rustup is necessary to use this subnet. Install it with 
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+When prompted, choose "Custom Insallation" and select the *Nightly* toolchain. 
+If rustup is already installed, run
+```
+rustup toolchain install nightly
+rustup default nightly
+```
+
 To run either a miner or validator, create a .env file with the following content, and edit as needed(all are optional):
 ```bash
 CHAIN_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
