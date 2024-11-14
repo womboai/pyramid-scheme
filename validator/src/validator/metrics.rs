@@ -1,4 +1,4 @@
-use opentelemetry::metrics::{Counter, Histogram, Meter, UpDownCounter, Gauge};
+use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter, UpDownCounter};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::metrics::reader::DefaultTemporalitySelector;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
