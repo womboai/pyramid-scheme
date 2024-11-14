@@ -21,19 +21,10 @@ thiserror = { workspace = true }
 
 tracing-subscriber = "0.3.18"
 
+rusttensor = { workspace = true }
+
 opentelemetry = "0.26.0"
 opentelemetry-appender-tracing = "0.26.0"
 opentelemetry-stdout = "0.26.0"
 opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
 opentelemetry-otlp = "0.26.0"
-
-parity-scale-codec = "3.0.0"
-subxt = { version = "0.38.0", features = ["jsonrpsee", "substrate-compat"] }
-hex = "0.4.3"
-
-[build-dependencies]
-subxt-codegen = "0.38.0"
-subxt-metadata = "0.38.0"
-subxt-utils-fetchmetadata = {version = "0.38.0", features = ["url"]}
-parity-scale-codec = "3.0.0"
-tokio = { workspace = true }
