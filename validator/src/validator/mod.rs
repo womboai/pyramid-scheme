@@ -21,7 +21,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
 use tracing::log::warn;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 mod memory_storage;
 pub mod metrics;
@@ -452,8 +452,11 @@ impl Validator {
             });
         }
 
+        let elapsed_update_blocks = block - neuron_info.last_update.0;
+        info!("It has been {elapsed_update_blocks} since last weight setting");
+
         // Set weights if enough time has passed
-        if block - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
+        if elapsed_update_blocks >= *config::EPOCH_LENGTH {
             if let Err(e) =
                 Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await
             {
@@ -801,6 +804,8 @@ impl Validator {
         let current_block = self.subtensor.get_block_number().await?;
         let elapsed_blocks = current_block - self.last_metagraph_sync;
 
+        info!("Current block is {current_block}, it has been {elapsed_blocks} since last metagraph sync");
+
         if elapsed_blocks >= *config::EPOCH_LENGTH {
             self.sync(Some(current_block)).await?;
         }
@@ -828,7 +833,8 @@ impl Validator {
 
             let range = start..end;
 
-            info!("Adding {range:?} to work queue");
+            debug!("Adding {range:?} to work queue");
+
             work_queue_sender
                 .send(range)
                 .expect("Work queue channel should not be closed");
@@ -842,7 +848,7 @@ impl Validator {
         let data_processed = AtomicU64::new(0);
 
         thread::scope(|scope| {
-            info!("Spawning completion event thread");
+            debug!("Spawning completion event thread");
 
             let _handle = scope.spawn(|| {
                 while data_processed.load(Ordering::Relaxed) < byte_count {
@@ -859,14 +865,14 @@ impl Validator {
 
                     match event.state {
                         ProcessingCompletionState::Completed(processed) => {
-                            info!("Miner {uid} finished assigned work");
+                            debug!("Miner {uid} finished assigned work");
 
                             self.release_connection(uid);
                             data_processed.fetch_add(processed, Ordering::Relaxed);
                             *score += processed as u128;
                         }
                         ProcessingCompletionState::Failed(processed, remaining) => {
-                            info!("Miner {uid} failed at assigned work");
+                            debug!("Miner {uid} failed at assigned work");
 
                             *self.neurons[uid as usize].connection.lock().unwrap() =
                                 ConnectionState::Disconnected;
@@ -879,7 +885,7 @@ impl Validator {
                                 .expect("Work queue channel should not be closed");
                         }
                         ProcessingCompletionState::Cheated(range) => {
-                            info!("Miner {uid} marked as cheater");
+                            debug!("Miner {uid} marked as cheater");
 
                             *self.neurons[uid as usize].connection.lock().unwrap() =
                                 ConnectionState::Unusable;
@@ -899,7 +905,7 @@ impl Validator {
             let mut handles = Vec::with_capacity(concurrent_worker_count as usize);
 
             for i in 0..concurrent_worker_count {
-                info!("Spawning worker thread {i}");
+                debug!("Spawning worker thread {i}");
 
                 let handle = scope.spawn(|| {
                     while data_processed.load(Ordering::Relaxed) < byte_count {
@@ -908,11 +914,11 @@ impl Validator {
                             continue;
                         };
 
-                        info!("Finding suitable miner for {range:?}");
+                        debug!("Finding suitable miner for {range:?}");
 
                         let (uid, connection) = self.find_suitable_connection();
 
-                        info!("Assigned {range:?} to miner {uid}");
+                        debug!("Assigned {range:?} to miner {uid}");
 
                         Self::handle_connection(
                             self.current_row.inner_mut(),
