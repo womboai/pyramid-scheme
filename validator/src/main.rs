@@ -12,9 +12,13 @@ use tracing::info;
 use std::net::Ipv4Addr;
 use tokio;
 use tokio::net::TcpListener;
+use tokio::time::Duration;
 
 mod api;
 mod validator;
+mod updater;
+
+use updater::Updater;
 
 async fn api_main() {
     let ip: Ipv4Addr = [0u8, 0, 0, 0].into();
@@ -52,6 +56,12 @@ async fn main() {
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
     tokio::task::spawn(api_main());
+
+    let updater = Updater::new(
+        Duration::from_secs(3600),
+        "main".to_string()
+    );
+    let _update_thread = updater.spawn();
 
     validator.run().await;
 
