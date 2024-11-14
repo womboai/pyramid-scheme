@@ -826,17 +826,17 @@ impl Validator {
             let start = index * chunk_size;
             let end = min((index + 1) * chunk_size, byte_count);
 
-            if start == end {
-                concurrent_worker_count = index;
-                break;
-            }
-
             let range = start..end;
 
             info!("Adding {range:?} to work queue");
             work_queue_sender
                 .send(range)
                 .expect("Work queue channel should not be closed");
+
+            if end == byte_count {
+                concurrent_worker_count = index + 1;
+                break;
+            }
         }
 
         let data_processed = AtomicU64::new(0);
@@ -903,8 +903,6 @@ impl Validator {
 
                 let handle = scope.spawn(|| {
                     while data_processed.load(Ordering::Relaxed) < byte_count {
-                        info!("Getting next work chunk");
-
                         let Ok(range) = work_queue_receiver.try_recv() else {
                             sleep(Duration::from_millis(100));
                             continue;
