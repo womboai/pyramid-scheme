@@ -412,7 +412,7 @@ impl Validator {
                             false,
                             self.metrics.clone(),
                         )
-                            .into(),
+                        .into(),
                         info,
                     };
                 } else {
@@ -428,7 +428,7 @@ impl Validator {
                             matches!(*neuron.score.get_mut().unwrap(), Score::Cheater),
                             self.metrics.clone(),
                         )
-                            .into()
+                        .into()
                     }
 
                     neuron.info = neurons[i].clone();
@@ -440,7 +440,8 @@ impl Validator {
                 let mut uid_iterator = (self.neurons.len()..neurons.len()).into_iter();
 
                 self.neurons.resize_with(neurons.len(), || {
-                    let info = neurons[uid_iterator.next().expect("There is more new UIDs")].clone();
+                    let info =
+                        neurons[uid_iterator.next().expect("There is more new UIDs")].clone();
 
                     NeuronData {
                         score: Score::default().into(),
@@ -451,7 +452,7 @@ impl Validator {
                             false,
                             self.metrics.clone(),
                         )
-                            .into(),
+                        .into(),
                         info,
                     }
                 });
@@ -772,7 +773,13 @@ impl Validator {
         for (uid, neuron) in self.neurons.iter().enumerate() {
             if let Ok(mut guard) = neuron.connection.try_lock() {
                 if let ConnectionState::Disconnected = &*guard {
-                    *guard = Self::connect_to_miner(&self.signer, uid as u16, &neuron.info, false, self.metrics.clone());
+                    *guard = Self::connect_to_miner(
+                        &self.signer,
+                        uid as u16,
+                        &neuron.info,
+                        false,
+                        self.metrics.clone(),
+                    );
 
                     if matches!(*guard, ConnectionState::Connected { .. }) {
                         return (uid as u16, ConnectionGuard::<'b>::new(guard));
@@ -781,7 +788,9 @@ impl Validator {
             }
         }
 
-        panic!("No suitable miners remaining for this step, crashing to revert to a previous state.");
+        panic!(
+            "No suitable miners remaining for this step, crashing to revert to a previous state."
+        );
     }
 
     fn release_connection(&self, uid: u16) {
@@ -829,7 +838,7 @@ impl Validator {
                 warn!("No connections available, retrying");
             }
 
-            return Ok(())
+            return Ok(());
         }
 
         info!("Splitting work into {connection_count} chunks");
