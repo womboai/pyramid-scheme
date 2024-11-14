@@ -1,0 +1,11 @@
+[toolchain]
+channel = "nightly"
+components = [
+	"cargo",
+	"clippy",
+	"rust-analyzer",
+	"rust-std",
+	"rustc",
+	"rustfmt",
+]
+targets = ["x86_64-unknown-linux-gnu"]
