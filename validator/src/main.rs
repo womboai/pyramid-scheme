@@ -8,6 +8,7 @@ use axum::Router;
 use dotenv::dotenv;
 use neuron::{config, hotkey_location, load_key_seed, setup_opentelemetry, signer_from_seed};
 use tracing::info;
+use neuron::updater::Updater;
 
 use std::net::Ipv4Addr;
 use tokio;
@@ -16,9 +17,6 @@ use tokio::time::Duration;
 
 mod api;
 mod validator;
-mod updater;
-
-use updater::Updater;
 
 async fn api_main() {
     let ip: Ipv4Addr = [0u8, 0, 0, 0].into();

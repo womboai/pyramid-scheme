@@ -15,12 +15,11 @@ use neuron::{
     config, hotkey_location, load_key_account_id, setup_opentelemetry, AccountId, NeuronInfoLite,
     Subtensor,
 };
+use neuron::updater::Updater;
 use threadpool::ThreadPool;
 use tracing::{error, info};
-use crate::updater::Updater;
 
 mod signature_checking;
-mod updater;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     // SAFETY: Every &_ is representable as &[u8], lifetimes match
