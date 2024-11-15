@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut, Range};
 use std::path::{Path, PathBuf};
@@ -17,8 +17,7 @@ use std::random::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpmc::Sender;
 use std::sync::{mpmc, Arc};
-use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, thread};
 use tracing::log::warn;
 use tracing::{debug, error, info};
@@ -139,7 +138,10 @@ pub struct Validator {
     center_column: MemoryMappedFile,
     step: u64,
 
-    last_metagraph_sync: u64,
+    current_block: u64,
+    last_block_fetch: Instant,
+    attempted_set_weights: bool,
+
     metrics: Arc<ValidatorMetrics>,
 }
 
@@ -182,8 +184,9 @@ impl Validator {
 
         let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
 
-        let last_metagraph_sync = subtensor.get_block_number().await.unwrap();
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
+        let current_block = subtensor.get_block_number().await.unwrap();
+        let last_block_fetch = Instant::now();
 
         let neuron_info = if let Some(neuron_info) = neuron_info {
             neuron_info.clone()
@@ -203,8 +206,21 @@ impl Validator {
         fs::create_dir_all("state").unwrap();
 
         if !valid_state {
-            fs::remove_file(CURRENT_ROW_FILE).unwrap();
-            fs::remove_file(CENTER_COLUMN_FILE).unwrap();
+            let result = fs::remove_file(CURRENT_ROW_FILE);
+
+            if let Err(e) = &result {
+                if e.kind() != ErrorKind::NotFound {
+                    result.unwrap();
+                }
+            }
+
+            let result = fs::remove_file(CENTER_COLUMN_FILE);
+
+            if let Err(e) = &result {
+                if e.kind() != ErrorKind::NotFound {
+                    result.unwrap();
+                }
+            }
 
             state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
         }
@@ -224,7 +240,7 @@ impl Validator {
             center_column[0] = 1;
         }
 
-        let mut neurons = neurons
+        let neurons = neurons
             .into_iter()
             .map(|info| {
                 let state_info = &state.key_info.get(info.uid.0 as usize);
@@ -259,13 +275,6 @@ impl Validator {
             })
             .collect::<Vec<_>>();
 
-        // Set weights if enough time has passed
-        if last_metagraph_sync - neuron_info.last_update.0 >= *config::EPOCH_LENGTH {
-            if let Err(e) = Self::set_weights(&mut neurons, &subtensor, &signer).await {
-                println!("Failed to set weights. {e}");
-            }
-        }
-
         Self {
             signer,
             subtensor,
@@ -274,7 +283,11 @@ impl Validator {
             current_row,
             center_column,
             step: state.step,
-            last_metagraph_sync,
+
+            current_block,
+            last_block_fetch,
+            attempted_set_weights: false,
+
             metrics,
         }
     }
@@ -367,107 +380,104 @@ impl Validator {
         Ok(())
     }
 
-    async fn sync(&mut self, block: Option<u64>) -> Result<()> {
-        let start = std::time::Instant::now();
-        info!("Syncing metagraph and connecting to miners");
+    async fn sync(&mut self) -> Result<bool> {
+        let set_weights = if let Err(e) =
+            Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await
+        {
+            self.attempted_set_weights = true;
 
-        let neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+            error!("Failed to set weights. {e}");
 
-        let block = if let Some(block) = block {
-            block
+            false
         } else {
-            self.subtensor.get_block_number().await?
+            true
         };
 
-        self.last_metagraph_sync = block;
+        let start = Instant::now();
 
-        let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
+        if set_weights {
+            info!("Syncing metagraph and connecting to miners");
 
-        let neuron_info = if let Some(neuron_info) = neuron_info {
-            neuron_info
-        } else {
-            Self::not_registered(self.signer.account_id());
-        };
+            let neurons = self.subtensor.get_neurons(*config::NETUID).await?;
 
-        self.uid = neuron_info.uid.0;
+            let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
-        // Update changed hotkeys
-        for i in 0..self.neurons.len() {
-            let neuron = &mut self.neurons[i];
-
-            if neuron.info.hotkey != neurons[i].hotkey {
-                let info = neurons[i].clone();
-
-                self.neurons[i] = NeuronData {
-                    score: Score::default().into(),
-                    connection: Self::connect_to_miner(
-                        &self.signer,
-                        self.uid,
-                        &info,
-                        false,
-                        self.metrics.clone(),
-                    )
-                    .into(),
-                    info,
-                };
+            let neuron_info = if let Some(neuron_info) = neuron_info {
+                neuron_info
             } else {
-                if matches!(
-                    neuron.connection.get_mut().unwrap(),
-                    ConnectionState::Disconnected
-                ) || neurons[i].axon_info != neuron.info.axon_info
-                {
-                    neuron.connection = Self::connect_to_miner(
-                        &self.signer,
-                        self.uid,
-                        &neurons[i],
-                        matches!(*neuron.score.get_mut().unwrap(), Score::Cheater),
-                        self.metrics.clone(),
-                    )
-                    .into()
-                }
+                Self::not_registered(self.signer.account_id());
+            };
 
-                neuron.info = neurons[i].clone();
+            self.uid = neuron_info.uid.0;
+
+            // Update changed hotkeys
+            for i in 0..self.neurons.len() {
+                let neuron = &mut self.neurons[i];
+
+                if neuron.info.hotkey != neurons[i].hotkey {
+                    let info = neurons[i].clone();
+
+                    self.neurons[i] = NeuronData {
+                        score: Score::default().into(),
+                        connection: Self::connect_to_miner(
+                            &self.signer,
+                            self.uid,
+                            &info,
+                            false,
+                            self.metrics.clone(),
+                        )
+                        .into(),
+                        info,
+                    };
+                } else {
+                    if matches!(
+                        neuron.connection.get_mut().unwrap(),
+                        ConnectionState::Disconnected
+                    ) || neurons[i].axon_info != neuron.info.axon_info
+                    {
+                        neuron.connection = Self::connect_to_miner(
+                            &self.signer,
+                            self.uid,
+                            &neurons[i],
+                            matches!(*neuron.score.get_mut().unwrap(), Score::Cheater),
+                            self.metrics.clone(),
+                        )
+                        .into()
+                    }
+
+                    neuron.info = neurons[i].clone();
+                }
             }
-        }
 
-        // Update scores array size if needed
-        if self.neurons.len() != neurons.len() {
-            let mut uid_iterator = (self.neurons.len()..neurons.len()).into_iter();
+            // Update scores array size if needed
+            if self.neurons.len() != neurons.len() {
+                let mut uid_iterator = (self.neurons.len()..neurons.len()).into_iter();
 
-            self.neurons.resize_with(neurons.len(), || {
-                let info = neurons[uid_iterator.next().expect("There is more new UIDs")].clone();
+                self.neurons.resize_with(neurons.len(), || {
+                    let info =
+                        neurons[uid_iterator.next().expect("There is more new UIDs")].clone();
 
-                NeuronData {
-                    score: Score::default().into(),
-                    connection: Self::connect_to_miner(
-                        &self.signer,
-                        self.uid,
-                        &info,
-                        false,
-                        self.metrics.clone(),
-                    )
-                    .into(),
-                    info,
-                }
-            });
-        }
-
-        let elapsed_update_blocks = block - neuron_info.last_update.0;
-        info!("It has been {elapsed_update_blocks} since last weight setting");
-
-        // Set weights if enough time has passed
-        if elapsed_update_blocks >= *config::EPOCH_LENGTH {
-            if let Err(e) =
-                Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await
-            {
-                error!("Failed to set weights. {e}");
+                    NeuronData {
+                        score: Score::default().into(),
+                        connection: Self::connect_to_miner(
+                            &self.signer,
+                            self.uid,
+                            &info,
+                            false,
+                            self.metrics.clone(),
+                        )
+                        .into(),
+                        info,
+                    }
+                });
             }
         }
 
         self.metrics
             .sync_duration
             .record(start.elapsed().as_secs_f64(), &[]);
-        Ok(())
+
+        Ok(set_weights)
     }
 
     fn verify_result(original: &[u8], result: &[u8]) -> bool {
@@ -777,7 +787,13 @@ impl Validator {
         for (uid, neuron) in self.neurons.iter().enumerate() {
             if let Ok(mut guard) = neuron.connection.try_lock() {
                 if let ConnectionState::Disconnected = &*guard {
-                    *guard = Self::connect_to_miner(&self.signer, uid as u16, &neuron.info, false, self.metrics.clone());
+                    *guard = Self::connect_to_miner(
+                        &self.signer,
+                        uid as u16,
+                        &neuron.info,
+                        false,
+                        self.metrics.clone(),
+                    );
 
                     if matches!(*guard, ConnectionState::Connected { .. }) {
                         return (uid as u16, ConnectionGuard::<'b>::new(guard));
@@ -786,7 +802,9 @@ impl Validator {
             }
         }
 
-        panic!("No suitable miners remaining for this step, crashing to revert to a previous state.");
+        panic!(
+            "No suitable miners remaining for this step, crashing to revert to a previous state."
+        );
     }
 
     fn release_connection(&self, uid: u16) {
@@ -797,25 +815,51 @@ impl Validator {
         }
     }
 
-    async fn do_step(&mut self) -> Result<()> {
-        let start = std::time::Instant::now();
+    async fn do_step(&mut self, block: u64) -> Result<()> {
+        let start = Instant::now();
+
         info!("Evolution step {}", self.step);
 
-        let current_block = self.subtensor.get_block_number().await?;
-        let elapsed_blocks = current_block - self.last_metagraph_sync;
+        let mut elapsed_blocks = block - self.neurons[self.uid as usize].info.last_update.0;
 
-        info!("Current block is {current_block}, it has been {elapsed_blocks} since last metagraph sync");
+        let should_sleep = if !self.attempted_set_weights {
+            info!("Current block is {block}, it has been {elapsed_blocks} blocks since last update");
 
-        if elapsed_blocks >= *config::EPOCH_LENGTH {
-            self.sync(Some(current_block)).await?;
+            if elapsed_blocks >= *config::EPOCH_LENGTH {
+                let set_weights = self.sync().await?;
+
+                elapsed_blocks = 0;
+
+                set_weights
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        let connection_count = self.worker_count_hint() as u64;
+
+        if connection_count == 0 {
+            if should_sleep {
+                let blocks = *config::EPOCH_LENGTH - elapsed_blocks;
+
+                warn!("No connections available, sleeping for {blocks} to resync");
+
+                tokio::time::sleep(Duration::from_secs(blocks * 12)).await;
+            } else {
+                warn!("No connections available, retrying");
+            }
+
+            return Ok(());
         }
 
         self.current_row
             .ensure_capacity(Self::current_row_file_size(self.step))?;
+
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        let connection_count = self.worker_count_hint() as u64;
         info!("Splitting work into {connection_count} chunks");
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
@@ -855,7 +899,7 @@ impl Validator {
                     let Ok(event): Result<ProcessingCompletionResult, _> =
                         completion_receiver.try_recv()
                     else {
-                        sleep(Duration::from_millis(100));
+                        thread::sleep(Duration::from_millis(100));
                         continue;
                     };
 
@@ -910,7 +954,7 @@ impl Validator {
                 let handle = scope.spawn(|| {
                     while data_processed.load(Ordering::Relaxed) < byte_count {
                         let Ok(range) = work_queue_receiver.try_recv() else {
-                            sleep(Duration::from_millis(100));
+                            thread::sleep(Duration::from_millis(100));
                             continue;
                         };
 
@@ -970,7 +1014,24 @@ impl Validator {
 
     pub(crate) async fn run(&mut self) {
         loop {
-            if let Err(e) = self.do_step().await {
+            if self.last_block_fetch.elapsed() > Duration::from_secs(12) {
+                let block = match self.subtensor.get_block_number().await {
+                    Ok(block) => block,
+                    Err(e) => {
+                        error!("Failed to fetch block, {e}. Retrying");
+
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+
+                        return;
+                    },
+                };
+
+                self.current_block = block;
+                self.last_block_fetch = Instant::now();
+                self.attempted_set_weights = false;
+            }
+
+            if let Err(e) = self.do_step(self.current_block).await {
                 error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }
