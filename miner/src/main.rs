@@ -15,6 +15,7 @@ use neuron::{
     config, hotkey_location, load_key_account_id, setup_opentelemetry, AccountId, NeuronInfoLite,
     Subtensor,
 };
+use neuron::updater::Updater;
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
@@ -302,6 +303,11 @@ async fn main() {
     if let Err(e) = dotenv() {
         println!("Could not load .env: {e}");
     }
+
+    let updater = Updater::new(
+        Duration::from_secs(3600),
+    );
+    updater.spawn();
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),
