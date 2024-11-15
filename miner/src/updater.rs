@@ -9,9 +9,6 @@ pub enum UpdaterError {
     #[error("Git pull failed: {0}")]
     PullFailed(String),
     
-    #[error("Build failed: {0}")]
-    BuildFailed(String),
-    
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     
@@ -61,18 +58,7 @@ impl Updater {
         }
 
         info!("Update found: {}", stdout.trim());
-
-        let build = Command::new("cargo")
-            .args(["run", "--release"])
-            .output()?;
-
-        if !build.status.success() {
-            return Err(UpdaterError::BuildFailed(
-                String::from_utf8_lossy(&build.stderr).to_string()
-            ));
-        }
-
-        info!("Update downloaded and built successfully. Restarting process to apply changes...");
+        info!("Update downloaded successfully. Please rebuild and restart the process to apply changes.");
         Ok(())
     }
 }
