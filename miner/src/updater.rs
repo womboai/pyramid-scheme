@@ -18,14 +18,12 @@ pub enum UpdaterError {
 
 pub struct Updater {
     check_interval: Duration,
-    git_branch: String,
 }
 
 impl Updater {
-    pub fn new(check_interval: Duration, git_branch: String) -> Self {
+    pub fn new(check_interval: Duration) -> Self {
         Self { 
             check_interval,
-            git_branch,
         }
     }
 
@@ -42,7 +40,7 @@ impl Updater {
 
     fn check_and_update(&self) -> Result<(), UpdaterError> {
         let pull = Command::new("git")
-            .args(["pull", "--ff-only", "origin", &self.git_branch])
+            .args(["pull", "--ff-only"])
             .output()?;
 
         if !pull.status.success() {

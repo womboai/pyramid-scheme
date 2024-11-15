@@ -307,7 +307,6 @@ async fn main() {
 
     let updater = Updater::new(
         Duration::from_secs(3600),
-        "main".to_string(),
     );
     updater.spawn();
 
