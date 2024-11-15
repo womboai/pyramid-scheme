@@ -17,8 +17,10 @@ use neuron::{
 };
 use threadpool::ThreadPool;
 use tracing::{error, info};
+use crate::updater::Updater;
 
 mod signature_checking;
+mod updater;
 
 fn as_u8<T>(data: &[T]) -> &[u8] {
     // SAFETY: Every &_ is representable as &[u8], lifetimes match
@@ -302,6 +304,12 @@ async fn main() {
     if let Err(e) = dotenv() {
         println!("Could not load .env: {e}");
     }
+
+    let updater = Updater::new(
+        Duration::from_secs(3600),
+        "main".to_string(),
+    );
+    updater.spawn();
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),
