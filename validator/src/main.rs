@@ -6,10 +6,11 @@ use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
 use axum::Router;
 use dotenv::dotenv;
-use neuron::{config, hotkey_location, load_key_seed, setup_opentelemetry, signer_from_seed};
+use neuron::{config, setup_opentelemetry};
 use tracing::info;
 
 use std::net::Ipv4Addr;
+use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
 use tokio;
 use tokio::net::TcpListener;
 

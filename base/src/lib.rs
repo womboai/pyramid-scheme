@@ -1,18 +1,11 @@
 extern crate core;
 
-use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
-
-use anyhow::Result;
 use opentelemetry::{KeyValue, Value as LogValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::logs::LoggerProvider;
 use opentelemetry_sdk::Resource;
-use serde_json::Value as JsonValue;
-use thiserror::Error;
+use rusttensor::AccountId;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;

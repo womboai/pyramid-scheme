@@ -1,11 +1,15 @@
-use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
-use neuron::{config, AccountId, NeuronInfoLite, Signer, Subtensor};
+use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
+use neuron::config;
+use rusttensor::{subtensor, AccountId};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
 
 use anyhow::Result;
+use rusttensor::rpc::{call_runtime_api_decoded, NeuronInfoLite};
+use rusttensor::subtensor::Subtensor;
+use rusttensor::wallet::Signer;
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
@@ -19,6 +23,7 @@ use std::sync::mpmc::Sender;
 use std::sync::{mpmc, Arc};
 use std::time::Duration;
 use std::{fs, thread};
+use rusttensor::api::apis;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -176,9 +181,12 @@ impl Validator {
     }
 
     pub async fn new(signer: Signer, metrics: Arc<ValidatorMetrics>) -> Self {
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let block = subtensor.blocks().at_latest().await.unwrap();
+        let runtime_api = subtensor.runtime_api().at(block.reference());
+        let neurons_payload = apis().neuron_info_runtime_api().get_neurons_lite(*config::NETUID);
+        let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload).await.unwrap();
 
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
 
