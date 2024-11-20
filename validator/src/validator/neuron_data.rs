@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, RwLock};
-
+use rusttensor::rpc::NeuronInfoLite;
 use neuron::NeuronInfoLite;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
