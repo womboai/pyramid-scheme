@@ -10,12 +10,16 @@ use std::{io, slice};
 use crate::signature_checking::info_matches;
 use anyhow::Result;
 use dotenv::dotenv;
-use neuron::auth::{signature_matches, KeypairSignature, VerificationMessage};
-use neuron::{
-    config, hotkey_location, load_key_account_id, setup_opentelemetry, AccountId, NeuronInfoLite,
-    Subtensor,
-};
+use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
+use neuron::{config, setup_opentelemetry};
+use rusttensor::api::apis;
+use rusttensor::rpc::call_runtime_api_decoded;
+use rusttensor::rpc::types::NeuronInfoLite;
+use rusttensor::sign::{verify_signature, KeypairSignature};
+use rusttensor::subtensor::Subtensor;
+use rusttensor::wallet::{hotkey_location, load_key_account_id};
+use rusttensor::{AccountId, Block, BlockNumber};
 use threadpool::ThreadPool;
 use tracing::{error, info};
 
@@ -190,20 +194,28 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
 struct Miner {
     account_id: AccountId,
     subtensor: Subtensor,
-    current_block: u64,
+    current_block: Block,
     last_block_fetch: Instant,
     neurons: Vec<NeuronInfoLite>,
-    last_metagraph_sync: u64,
+    last_metagraph_sync: BlockNumber,
     uid: u16,
 }
 
 impl Miner {
     async fn new(account_id: AccountId) -> Self {
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-        let current_block = subtensor.get_block_number().await.unwrap();
+        let current_block = subtensor.blocks().at_latest().await.unwrap();
         let last_block_fetch = Instant::now();
-        let neurons = subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let runtime_api = subtensor.runtime_api().at(current_block.reference());
+        let neurons = call_runtime_api_decoded(
+            &runtime_api,
+            apis()
+                .neuron_info_runtime_api()
+                .get_neurons_lite(*config::NETUID),
+        )
+        .await
+        .unwrap();
 
         let neuron = neurons
             .iter()
@@ -215,20 +227,30 @@ impl Miner {
         Self {
             account_id,
             subtensor,
+            last_metagraph_sync: current_block.number(),
             current_block,
             last_block_fetch,
             neurons,
-            last_metagraph_sync: current_block,
             uid,
         }
     }
 
     async fn sync(&mut self, now: Instant) -> Result<()> {
-        self.current_block = self.subtensor.get_block_number().await?;
+        self.current_block = self.subtensor.blocks().at_latest().await?;
         self.last_block_fetch = now;
 
-        if self.current_block - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
-            self.neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+        if self.current_block.number() - self.last_metagraph_sync >= *config::EPOCH_LENGTH {
+            let runtime_api = self
+                .subtensor
+                .runtime_api()
+                .at(self.current_block.reference());
+            self.neurons = call_runtime_api_decoded(
+                &runtime_api,
+                apis()
+                    .neuron_info_runtime_api()
+                    .get_neurons_lite(*config::NETUID),
+            )
+            .await?;
 
             let neuron = self
                 .neurons
@@ -236,7 +258,7 @@ impl Miner {
                 .find(|&info| info.hotkey == self.account_id)
                 .expect("Not registered");
 
-            self.last_metagraph_sync = self.current_block;
+            self.last_metagraph_sync = self.current_block.number();
             self.uid = neuron.uid.0;
         }
 
@@ -284,7 +306,7 @@ impl Miner {
                         }
                     };
 
-                    signature_matches(&signature, &message)
+                    verify_signature(&message.validator.account_id, &signature, &message)
                 };
 
                 if !signature_matches {
@@ -304,9 +326,7 @@ async fn main() {
         println!("Could not load .env: {e}");
     }
 
-    let updater = Updater::new(
-        Duration::from_secs(3600),
-    );
+    let updater = Updater::new(Duration::from_secs(3600));
     updater.spawn();
 
     let hotkey_location = hotkey_location(

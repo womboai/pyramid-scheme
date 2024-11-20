@@ -1,15 +1,19 @@
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
 use neuron::config;
-use rusttensor::{subtensor, AccountId, Block, SubtensorConfig};
+use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
 
 use anyhow::Result;
-use rusttensor::rpc::{call_runtime_api_decoded, NeuronInfoLite};
+use rusttensor::api::apis;
+use rusttensor::rpc::call_runtime_api_decoded;
+use rusttensor::rpc::types::NeuronInfoLite;
+use rusttensor::sign::sign_message;
 use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::Signer;
+use rusttensor::weights::{set_weights_payload, NormalizedWeight};
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
@@ -23,8 +27,6 @@ use std::sync::mpmc::Sender;
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
-use rusttensor::api::apis;
-use rusttensor::sign::sign_message;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -190,8 +192,12 @@ impl Validator {
 
         let current_block = subtensor.blocks().at_latest().await.unwrap();
         let runtime_api = subtensor.runtime_api().at(current_block.reference());
-        let neurons_payload = apis().neuron_info_runtime_api().get_neurons_lite(*config::NETUID);
-        let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload).await.unwrap();
+        let neurons_payload = apis()
+            .neuron_info_runtime_api()
+            .get_neurons_lite(*config::NETUID);
+        let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload)
+            .await
+            .unwrap();
 
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
         let last_block_fetch = Instant::now();
@@ -361,28 +367,33 @@ impl Validator {
             .max()
             .expect("Neurons should never be empty at this point, thus max should never be None");
 
-        let scores = neurons.iter_mut().map(|neuron| {
-            let normalized_score = match *neuron.score.get_mut().unwrap() {
-                Score::Legitimate(score) => {
-                    if max_score == 0 {
-                        u16::MAX
-                    } else {
-                        ((score * u16::MAX as u128) / max_score) as u16
+        let scores = neurons
+            .iter_mut()
+            .map(|neuron| {
+                let normalized_score = match *neuron.score.get_mut().unwrap() {
+                    Score::Legitimate(score) => {
+                        if max_score == 0 {
+                            u16::MAX
+                        } else {
+                            ((score * u16::MAX as u128) / max_score) as u16
+                        }
                     }
-                }
-                Score::Cheater => 0,
-            };
+                    Score::Cheater => 0,
+                };
 
-            (neuron.info.uid.0, normalized_score)
-        });
+                NormalizedWeight {
+                    uid: neuron.info.uid.0,
+                    weight: normalized_score,
+                }
+            })
+            .collect();
+
+        let payload =
+            set_weights_payload(*config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION);
 
         subtensor
-            .set_weights(
-                &signer,
-                *config::NETUID,
-                scores,
-                DATA_SPEC_VERSION + WEIGHTS_VERSION,
-            )
+            .tx()
+            .sign_and_submit_default(&payload, signer)
             .await?;
 
         Ok(())
@@ -406,8 +417,17 @@ impl Validator {
         if set_weights {
             info!("Syncing metagraph and connecting to miners");
 
-            let runtime_api = self.subtensor.runtime_api().at(self.current_block.reference());
-            let neurons = call_runtime_api_decoded(&runtime_api, apis().neuron_info_runtime_api().get_neurons_lite(*config::NETUID)).await?;
+            let runtime_api = self
+                .subtensor
+                .runtime_api()
+                .at(self.current_block.reference());
+            let neurons = call_runtime_api_decoded(
+                &runtime_api,
+                apis()
+                    .neuron_info_runtime_api()
+                    .get_neurons_lite(*config::NETUID),
+            )
+            .await?;
 
             let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
@@ -829,12 +849,16 @@ impl Validator {
 
         info!("Evolution step {}", self.step);
 
-        let mut elapsed_blocks = self.current_block.number() - self.neurons[self.uid as usize].info.last_update.0;
+        let mut elapsed_blocks = self.current_block.number()
+            - self.neurons[self.uid as usize].info.last_update.0 as BlockNumber;
 
         let should_sleep = if !self.attempted_set_weights {
-            info!("Current block is {block}, it has been {elapsed_blocks} blocks since last update");
+            info!(
+                "Current block is {block}, it has been {elapsed_blocks} blocks since last update",
+                block = self.current_block.number()
+            );
 
-            if elapsed_blocks as u64 >= *config::EPOCH_LENGTH {
+            if elapsed_blocks >= *config::EPOCH_LENGTH {
                 let set_weights = self.sync().await?;
 
                 elapsed_blocks = 0;
@@ -855,7 +879,7 @@ impl Validator {
 
                 warn!("No connections available, sleeping for {blocks} to resync");
 
-                tokio::time::sleep(Duration::from_secs(blocks * 12)).await;
+                tokio::time::sleep(Duration::from_secs(blocks as u64 * 12)).await;
             } else {
                 warn!("No connections available, retrying");
             }
@@ -1032,7 +1056,7 @@ impl Validator {
                         tokio::time::sleep(Duration::from_secs(12)).await;
 
                         return;
-                    },
+                    }
                 };
 
                 self.current_block = block;

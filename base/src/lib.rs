@@ -23,7 +23,6 @@ compile_error!("Compilation is only allowed for 64-bit targets");
 #[cfg(not(target_endian = "little"))]
 compile_error!("Compilation is only allowed for little-endian based processors");
 
-
 pub fn setup_opentelemetry(account_id: &AccountId, neuron_type: &'static str) {
     let filter_layer = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
@@ -58,4 +57,3 @@ pub fn setup_opentelemetry(account_id: &AccountId, neuron_type: &'static str) {
 
     info!("Starting {} v{}", neuron_type, env!("CARGO_PKG_VERSION"));
 }
-

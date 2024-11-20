@@ -1,8 +1,11 @@
-use neuron::{config, hotkey_location, load_key_seed, signer_from_seed, AxonProtocol, Subtensor};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
 use dotenv::dotenv;
+use neuron::config;
+use rusttensor::axon::{serve_axon_payload, AxonProtocol};
+use rusttensor::subtensor::Subtensor;
+use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
 
 #[derive(Parser)]
 struct Cli {
@@ -28,16 +31,17 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+    let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+
+    let payload = serve_axon_payload(
+        *config::NETUID,
+        SocketAddr::new(args.ip, args.port.unwrap_or_else(|| *config::PORT)),
+        AxonProtocol::Tcp,
+    );
 
     subtensor
-        .serve_axon(
-            &signer,
-            *config::NETUID,
-            args.ip,
-            args.port.unwrap_or_else(|| *config::PORT),
-            AxonProtocol::Tcp,
-        )
+        .tx()
+        .sign_and_submit_default(&payload, &signer)
         .await
         .unwrap();
 }
