@@ -1,3 +1,4 @@
+use rusttensor::BlockNumber;
 use std::borrow::ToOwned;
 use std::convert::Into;
 use std::env;
@@ -5,7 +6,7 @@ use std::iter::Iterator;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-pub static EPOCH_LENGTH: LazyLock<u64> = LazyLock::new(|| {
+pub static EPOCH_LENGTH: LazyLock<BlockNumber> = LazyLock::new(|| {
     env::var("EPOCH_LENGTH")
         .map(|var| var.parse().unwrap())
         .unwrap_or(100)

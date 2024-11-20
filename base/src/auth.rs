@@ -1,9 +1,5 @@
 use core::slice;
-
-use crate::{AccountId, Signer};
-use subxt::ext::sp_core::{sr25519, Pair};
-
-pub type KeypairSignature = sr25519::Signature;
+use rusttensor::AccountId;
 
 #[repr(C)]
 pub struct KeyRegistrationInfo {
@@ -27,16 +23,4 @@ impl AsRef<[u8]> for VerificationMessage {
         // SAFETY: Safe as this is aligned with u8, and is repr(C)
         unsafe { slice::from_raw_parts(self as *const _ as *const u8, size_of::<Self>()) }
     }
-}
-
-pub fn signature_matches(signature: &KeypairSignature, message: &VerificationMessage) -> bool {
-    sr25519::Pair::verify(
-        signature,
-        message,
-        &sr25519::Public::from_raw(message.validator.account_id.0),
-    )
-}
-
-pub fn sign_message(signer: &Signer, message: &VerificationMessage) -> KeypairSignature {
-    signer.signer().sign((&message).as_ref())
 }

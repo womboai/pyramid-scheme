@@ -23,6 +23,8 @@ dotenv = { workspace = true }
 
 thiserror = { workspace = true }
 
+rusttensor = { workspace = true }
+
 clap = { version = "4.5.20", features = ["derive"] }
 
 rule-30-solver-neuron = { path = "../base" }

@@ -1,11 +1,19 @@
-use neuron::auth::{sign_message, KeyRegistrationInfo, VerificationMessage};
-use neuron::{config, AccountId, NeuronInfoLite, Signer, Subtensor};
+use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
+use neuron::config;
+use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData, Score};
 
 use anyhow::Result;
+use rusttensor::api::apis;
+use rusttensor::rpc::call_runtime_api_decoded;
+use rusttensor::rpc::types::NeuronInfoLite;
+use rusttensor::sign::sign_message;
+use rusttensor::subtensor::Subtensor;
+use rusttensor::wallet::Signer;
+use rusttensor::weights::{set_weights_payload, NormalizedWeight};
 use serde::{Deserialize, Serialize};
 use std::cell::UnsafeCell;
 use std::cmp::min;
@@ -138,7 +146,7 @@ pub struct Validator {
     center_column: MemoryMappedFile,
     step: u64,
 
-    current_block: u64,
+    current_block: Block,
     last_block_fetch: Instant,
     attempted_set_weights: bool,
 
@@ -180,12 +188,18 @@ impl Validator {
     }
 
     pub async fn new(signer: Signer, metrics: Arc<ValidatorMetrics>) -> Self {
-        let subtensor = Subtensor::new(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
 
-        let neurons: Vec<NeuronInfoLite> = subtensor.get_neurons(*config::NETUID).await.unwrap();
+        let current_block = subtensor.blocks().at_latest().await.unwrap();
+        let runtime_api = subtensor.runtime_api().at(current_block.reference());
+        let neurons_payload = apis()
+            .neuron_info_runtime_api()
+            .get_neurons_lite(*config::NETUID);
+        let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload)
+            .await
+            .unwrap();
 
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
-        let current_block = subtensor.get_block_number().await.unwrap();
         let last_block_fetch = Instant::now();
 
         let neuron_info = if let Some(neuron_info) = neuron_info {
@@ -353,28 +367,33 @@ impl Validator {
             .max()
             .expect("Neurons should never be empty at this point, thus max should never be None");
 
-        let scores = neurons.iter_mut().map(|neuron| {
-            let normalized_score = match *neuron.score.get_mut().unwrap() {
-                Score::Legitimate(score) => {
-                    if max_score == 0 {
-                        u16::MAX
-                    } else {
-                        ((score * u16::MAX as u128) / max_score) as u16
+        let scores = neurons
+            .iter_mut()
+            .map(|neuron| {
+                let normalized_score = match *neuron.score.get_mut().unwrap() {
+                    Score::Legitimate(score) => {
+                        if max_score == 0 {
+                            u16::MAX
+                        } else {
+                            ((score * u16::MAX as u128) / max_score) as u16
+                        }
                     }
-                }
-                Score::Cheater => 0,
-            };
+                    Score::Cheater => 0,
+                };
 
-            (neuron.info.uid.0, normalized_score)
-        });
+                NormalizedWeight {
+                    uid: neuron.info.uid.0,
+                    weight: normalized_score,
+                }
+            })
+            .collect();
+
+        let payload =
+            set_weights_payload(*config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION);
 
         subtensor
-            .set_weights(
-                &signer,
-                *config::NETUID,
-                scores,
-                DATA_SPEC_VERSION + WEIGHTS_VERSION,
-            )
+            .tx()
+            .sign_and_submit_default(&payload, signer)
             .await?;
 
         Ok(())
@@ -398,7 +417,17 @@ impl Validator {
         if set_weights {
             info!("Syncing metagraph and connecting to miners");
 
-            let neurons = self.subtensor.get_neurons(*config::NETUID).await?;
+            let runtime_api = self
+                .subtensor
+                .runtime_api()
+                .at(self.current_block.reference());
+            let neurons = call_runtime_api_decoded(
+                &runtime_api,
+                apis()
+                    .neuron_info_runtime_api()
+                    .get_neurons_lite(*config::NETUID),
+            )
+            .await?;
 
             let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
@@ -815,15 +844,19 @@ impl Validator {
         }
     }
 
-    async fn do_step(&mut self, block: u64) -> Result<()> {
+    async fn do_step(&mut self) -> Result<()> {
         let start = Instant::now();
 
         info!("Evolution step {}", self.step);
 
-        let mut elapsed_blocks = block - self.neurons[self.uid as usize].info.last_update.0;
+        let mut elapsed_blocks = self.current_block.number()
+            - self.neurons[self.uid as usize].info.last_update.0 as BlockNumber;
 
         let should_sleep = if !self.attempted_set_weights {
-            info!("Current block is {block}, it has been {elapsed_blocks} blocks since last update");
+            info!(
+                "Current block is {block}, it has been {elapsed_blocks} blocks since last update",
+                block = self.current_block.number()
+            );
 
             if elapsed_blocks >= *config::EPOCH_LENGTH {
                 let set_weights = self.sync().await?;
@@ -846,7 +879,7 @@ impl Validator {
 
                 warn!("No connections available, sleeping for {blocks} to resync");
 
-                tokio::time::sleep(Duration::from_secs(blocks * 12)).await;
+                tokio::time::sleep(Duration::from_secs(blocks as u64 * 12)).await;
             } else {
                 warn!("No connections available, retrying");
             }
@@ -1015,7 +1048,7 @@ impl Validator {
     pub(crate) async fn run(&mut self) {
         loop {
             if self.last_block_fetch.elapsed() > Duration::from_secs(12) {
-                let block = match self.subtensor.get_block_number().await {
+                let block = match self.subtensor.blocks().at_latest().await {
                     Ok(block) => block,
                     Err(e) => {
                         error!("Failed to fetch block, {e}. Retrying");
@@ -1023,7 +1056,7 @@ impl Validator {
                         tokio::time::sleep(Duration::from_secs(12)).await;
 
                         return;
-                    },
+                    }
                 };
 
                 self.current_block = block;
@@ -1031,7 +1064,7 @@ impl Validator {
                 self.attempted_set_weights = false;
             }
 
-            if let Err(e) = self.do_step(self.current_block).await {
+            if let Err(e) = self.do_step().await {
                 error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }

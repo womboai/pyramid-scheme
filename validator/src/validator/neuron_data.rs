@@ -1,10 +1,9 @@
+use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, RwLock};
-
-use neuron::NeuronInfoLite;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Score {

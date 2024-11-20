@@ -1,5 +1,7 @@
 use neuron::auth::VerificationMessage;
-use neuron::{config, AccountId, NeuronInfoLite};
+use neuron::config;
+use rusttensor::rpc::types::NeuronInfoLite;
+use rusttensor::AccountId;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
