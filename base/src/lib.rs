@@ -13,6 +13,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 pub mod auth;
 pub mod config;
+pub mod updater;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &'static str = "http://18.215.170.244:4317";
 

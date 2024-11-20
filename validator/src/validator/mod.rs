@@ -21,7 +21,7 @@ use std::random::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpmc::Sender;
 use std::sync::{mpmc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, thread};
 use rusttensor::api::apis;
 use tracing::log::warn;
@@ -143,6 +143,10 @@ pub struct Validator {
     center_column: MemoryMappedFile,
     step: u64,
 
+    current_block: u64,
+    last_block_fetch: Instant,
+    attempted_set_weights: bool,
+
     metrics: Arc<ValidatorMetrics>,
 }
 
@@ -189,6 +193,8 @@ impl Validator {
         let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload).await.unwrap();
 
         let neuron_info = Self::find_neuron_info(&neurons, signer.account_id());
+        let current_block = subtensor.get_block_number().await.unwrap();
+        let last_block_fetch = Instant::now();
 
         let neuron_info = if let Some(neuron_info) = neuron_info {
             neuron_info.clone()
@@ -285,6 +291,11 @@ impl Validator {
             current_row,
             center_column,
             step: state.step,
+
+            current_block,
+            last_block_fetch,
+            attempted_set_weights: false,
+
             metrics,
         }
     }
@@ -381,13 +392,16 @@ impl Validator {
         let set_weights = if let Err(e) =
             Self::set_weights(&mut self.neurons, &self.subtensor, &self.signer).await
         {
+            self.attempted_set_weights = true;
+
             error!("Failed to set weights. {e}");
+
             false
         } else {
             true
         };
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         if set_weights {
             info!("Syncing metagraph and connecting to miners");
@@ -809,29 +823,28 @@ impl Validator {
         }
     }
 
-    async fn do_step(&mut self) -> Result<()> {
-        let start = std::time::Instant::now();
+    async fn do_step(&mut self, block: u64) -> Result<()> {
+        let start = Instant::now();
+
         info!("Evolution step {}", self.step);
 
-        let current_block = self.subtensor.get_block_number().await?;
-        let mut elapsed_blocks = current_block - self.neurons[self.uid as usize].info.last_update.0;
+        let mut elapsed_blocks = block - self.neurons[self.uid as usize].info.last_update.0;
 
-        info!("Current block is {current_block}, it has been {elapsed_blocks} since last update");
+        let should_sleep = if !self.attempted_set_weights {
+            info!("Current block is {block}, it has been {elapsed_blocks} blocks since last update");
 
-        let should_sleep = if elapsed_blocks >= *config::EPOCH_LENGTH {
-            let set_weights = self.sync().await?;
+            if elapsed_blocks >= *config::EPOCH_LENGTH {
+                let set_weights = self.sync().await?;
 
-            elapsed_blocks = 0;
+                elapsed_blocks = 0;
 
-            set_weights
+                set_weights
+            } else {
+                true
+            }
         } else {
             true
         };
-
-        self.current_row
-            .ensure_capacity(Self::current_row_file_size(self.step))?;
-        self.center_column
-            .ensure_capacity(Self::center_column_file_size(self.step))?;
 
         let connection_count = self.worker_count_hint() as u64;
 
@@ -848,6 +861,12 @@ impl Validator {
 
             return Ok(());
         }
+
+        self.current_row
+            .ensure_capacity(Self::current_row_file_size(self.step))?;
+
+        self.center_column
+            .ensure_capacity(Self::center_column_file_size(self.step))?;
 
         info!("Splitting work into {connection_count} chunks");
 
@@ -1003,7 +1022,24 @@ impl Validator {
 
     pub(crate) async fn run(&mut self) {
         loop {
-            if let Err(e) = self.do_step().await {
+            if self.last_block_fetch.elapsed() > Duration::from_secs(12) {
+                let block = match self.subtensor.get_block_number().await {
+                    Ok(block) => block,
+                    Err(e) => {
+                        error!("Failed to fetch block, {e}. Retrying");
+
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+
+                        return;
+                    },
+                };
+
+                self.current_block = block;
+                self.last_block_fetch = Instant::now();
+                self.attempted_set_weights = false;
+            }
+
+            if let Err(e) = self.do_step(self.current_block).await {
                 error!("Error during evolution step {step}, {e}", step = self.step);
             }
         }

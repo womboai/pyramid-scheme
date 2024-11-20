@@ -8,11 +8,13 @@ use axum::Router;
 use dotenv::dotenv;
 use neuron::{config, setup_opentelemetry};
 use tracing::info;
+use neuron::updater::Updater;
 
 use std::net::Ipv4Addr;
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
 use tokio;
 use tokio::net::TcpListener;
+use tokio::time::Duration;
 
 mod api;
 mod validator;
@@ -53,6 +55,11 @@ async fn main() {
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
     tokio::task::spawn(api_main());
+
+    let updater = Updater::new(
+        Duration::from_secs(3600),
+    );
+    let _update_thread = updater.spawn();
 
     validator.run().await;
 
