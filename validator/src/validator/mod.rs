@@ -1,5 +1,5 @@
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
-use neuron::config;
+use neuron::{config, subtensor};
 use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
@@ -188,7 +188,7 @@ impl Validator {
     }
 
     pub async fn new(signer: Signer, metrics: Arc<ValidatorMetrics>) -> Self {
-        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = subtensor().await.unwrap();
 
         let current_block = subtensor.blocks().at_latest().await.unwrap();
         let runtime_api = subtensor.runtime_api().at(current_block.reference());

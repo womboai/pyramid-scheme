@@ -1,10 +1,12 @@
 extern crate core;
 
+use anyhow::Result;
 use opentelemetry::{KeyValue, Value as LogValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::logs::LoggerProvider;
 use opentelemetry_sdk::Resource;
+use rusttensor::subtensor::Subtensor;
 use rusttensor::AccountId;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
@@ -22,6 +24,14 @@ compile_error!("Compilation is only allowed for 64-bit targets");
 
 #[cfg(not(target_endian = "little"))]
 compile_error!("Compilation is only allowed for little-endian based processors");
+
+pub async fn subtensor() -> Result<Subtensor> {
+    if *config::INSECURE_CHAIN_SCHEME {
+        Ok(Subtensor::from_insecure_url(&config::CHAIN_ENDPOINT).await?)
+    } else {
+        Ok(Subtensor::from_url(&config::CHAIN_ENDPOINT).await?)
+    }
+}
 
 pub fn setup_opentelemetry(account_id: &AccountId, neuron_type: &'static str) {
     let filter_layer = EnvFilter::try_from_default_env()

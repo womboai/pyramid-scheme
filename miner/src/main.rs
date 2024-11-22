@@ -12,7 +12,7 @@ use anyhow::Result;
 use dotenv::dotenv;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, setup_opentelemetry};
+use neuron::{config, setup_opentelemetry, subtensor};
 use rusttensor::api::apis;
 use rusttensor::rpc::call_runtime_api_decoded;
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -203,7 +203,7 @@ struct Miner {
 
 impl Miner {
     async fn new(account_id: AccountId) -> Self {
-        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = subtensor().await.unwrap();
 
         let current_block = subtensor.blocks().at_latest().await.unwrap();
         let last_block_fetch = Instant::now();

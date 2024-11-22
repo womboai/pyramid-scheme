@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
 use dotenv::dotenv;
-use neuron::config;
+use neuron::{config, subtensor};
 use rusttensor::axon::{serve_axon_payload, AxonProtocol};
 use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
@@ -31,7 +31,7 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+    let subtensor = subtensor().await.unwrap();
 
     let payload = serve_axon_payload(
         *config::NETUID,
