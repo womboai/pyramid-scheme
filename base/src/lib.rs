@@ -27,9 +27,9 @@ compile_error!("Compilation is only allowed for little-endian based processors")
 
 pub async fn subtensor() -> Result<Subtensor> {
     if *config::INSECURE_CHAIN_SCHEME {
-        Ok(Subtensor::from_insecure_url(&config::CHAIN_ENDPOINT).await?)
+        Ok(Subtensor::from_insecure_url(&*config::CHAIN_ENDPOINT).await?)
     } else {
-        Ok(Subtensor::from_url(&config::CHAIN_ENDPOINT).await?)
+        Ok(Subtensor::from_url(&*config::CHAIN_ENDPOINT).await?)
     }
 }
 
