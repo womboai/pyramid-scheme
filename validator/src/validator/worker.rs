@@ -18,7 +18,7 @@ const VALIDATION_CHANCE: f32 = 0.3;
 
 pub enum ProcessingCompletionState {
     Completed(u64),
-    Failed(u64, Range<u64>),
+    Failed(u64, Range<u64>, ConnectionGuard),
     Cheated(Range<u64>),
 }
 
@@ -74,9 +74,10 @@ fn handle_connection(
         None
     };
 
-    let mut processed = 0;
+    let mut total_processed = 0;
 
     for i in 0..iterations {
+        let mut processed = 0;
         let from = (start + i * buffer_size) as usize;
         let to = (start + (i + 1) * buffer_size) as usize;
 
@@ -92,8 +93,9 @@ fn handle_connection(
                             .send(ProcessingCompletionResult {
                                 uid,
                                 state: ProcessingCompletionState::Failed(
-                                    processed,
-                                    start + processed..end,
+                                    total_processed,
+                                    start + total_processed..end,
+                                    connection,
                                 ),
                             })
                             .unwrap();
@@ -110,8 +112,9 @@ fn handle_connection(
                         .send(ProcessingCompletionResult {
                             uid,
                             state: ProcessingCompletionState::Failed(
-                                processed,
-                                start + processed..end,
+                                total_processed,
+                                start + total_processed..end,
+                                connection,
                             ),
                         })
                         .unwrap();
@@ -144,8 +147,9 @@ fn handle_connection(
                                 .send(ProcessingCompletionResult {
                                     uid,
                                     state: ProcessingCompletionState::Failed(
-                                        processed,
-                                        start + processed..end,
+                                        total_processed,
+                                        start + total_processed..end,
+                                        connection,
                                     ),
                                 })
                                 .unwrap();
@@ -162,8 +166,9 @@ fn handle_connection(
                             .send(ProcessingCompletionResult {
                                 uid,
                                 state: ProcessingCompletionState::Failed(
-                                    processed,
-                                    start + processed..end,
+                                    total_processed,
+                                    start + total_processed..end,
+                                    connection,
                                 ),
                             })
                             .unwrap();
@@ -198,12 +203,14 @@ fn handle_connection(
 
             processed += written as u64;
         }
+
+        total_processed += processed;
     }
 
     completion_events
         .send(ProcessingCompletionResult {
             uid,
-            state: ProcessingCompletionState::Completed(processed),
+            state: ProcessingCompletionState::Completed(total_processed),
         })
         .unwrap();
 }
@@ -211,7 +218,6 @@ fn handle_connection(
 pub fn do_work(
     current_row: &CurrentRow,
     neurons: &Vec<NeuronData>,
-    signer: Signer,
     work_queue_receiver: Receiver<Range<u64>>,
     completion_sender: Sender<ProcessingCompletionResult>,
     metrics: Arc<ValidatorMetrics>,
@@ -224,7 +230,7 @@ pub fn do_work(
 
         debug!("Finding suitable miner for {range:?}");
 
-        let (uid, connection) = find_suitable_connection(neurons, &signer, &metrics);
+        let (uid, connection) = find_suitable_connection(neurons);
 
         debug!("Assigned {range:?} to miner {uid}");
 
