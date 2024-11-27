@@ -34,10 +34,10 @@ pub async fn handle_completion_events(
                 data_processed += processed;
                 *score += processed as u128;
             }
-            ProcessingCompletionState::Failed(processed, remaining) => {
+            ProcessingCompletionState::Failed(processed, remaining, mut connection) => {
                 debug!("Miner {uid} failed at assigned work");
 
-                *neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Disconnected;
+                *connection.guard = ConnectionState::Disconnected;
                 metrics.connected_miners.add(-1, &[]);
                 data_processed += processed;
                 *score += processed as u128;

@@ -103,18 +103,11 @@ pub fn worker_count_hint(neurons: &mut [NeuronData]) -> usize {
     count
 }
 
-pub fn find_suitable_connection<'a, 'b>(
-    neurons: &'a [NeuronData],
-    signer: &'a Signer,
-    metrics: &ValidatorMetrics,
-) -> (u16, ConnectionGuard<'b>)
-where
-    'a: 'b,
-{
+pub fn find_suitable_connection(neurons: &[NeuronData]) -> (u16, ConnectionGuard) {
     let free_connection = neurons.iter().enumerate().find_map(|(uid, &ref neuron)| {
         if let Some(mut guard) = neuron.connection.try_lock().ok() {
             if let ConnectionState::Connected(_) = &mut *guard {
-                Some((uid as u16, ConnectionGuard::<'b>::new(guard)))
+                Some((uid as u16, ConnectionGuard::new(guard)))
             } else {
                 None
             }
@@ -127,17 +120,13 @@ where
         return result;
     };
 
-    info!("No suitable miners found, reconnecting");
+    info!("No suitable miners found, waiting for connections");
 
     for (uid, neuron) in neurons.iter().enumerate() {
-        if let Ok(mut guard) = neuron.connection.try_lock() {
-            if let ConnectionState::Disconnected = &*guard {
-                *guard = connect_to_miner(signer, uid as u16, &neuron.info, false, metrics);
+        let mut guard = neuron.connection.lock().unwrap();
 
-                if matches!(*guard, ConnectionState::Connected(_)) {
-                    return (uid as u16, ConnectionGuard::<'b>::new(guard));
-                }
-            }
+        if let ConnectionState::Connected(_) = &*guard {
+            return (uid as u16, ConnectionGuard::new(guard));
         }
     }
 

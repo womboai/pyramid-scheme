@@ -23,11 +23,11 @@ use std::io::ErrorKind;
 use std::mem::transmute;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
-use std::pin::Pin;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -262,7 +262,8 @@ impl Validator {
                                     &info,
                                     matches!(state_info.unwrap().score, Score::Cheater),
                                     &metrics,
-                                ).into(),
+                                )
+                                .into(),
                                 info,
                             }
                         } else {
@@ -274,7 +275,8 @@ impl Validator {
                                     &info,
                                     false,
                                     &metrics,
-                                ).into(),
+                                )
+                                .into(),
                                 info,
                             }
                         }
@@ -297,9 +299,10 @@ impl Validator {
             .map(|_| {
                 let current_row =
                     unsafe { transmute::<&CurrentRow, &'static CurrentRow>(&current_row) };
+
                 let neurons =
                     unsafe { transmute::<&Vec<NeuronData>, &'static Vec<NeuronData>>(&neurons) };
-                let signer = signer.clone();
+
                 let work_queue_receiver = work_queue_receiver.clone();
                 let completion_sender = completion_sender.clone();
                 let metrics = metrics.clone();
@@ -308,7 +311,6 @@ impl Validator {
                     do_work(
                         current_row,
                         neurons,
-                        signer,
                         work_queue_receiver,
                         completion_sender,
                         metrics,
@@ -547,9 +549,13 @@ impl Validator {
                 info!("Spawning {extra_workers} extra worker threads");
 
                 for _ in 0..extra_workers {
-                    let current_row = unsafe { transmute::<&CurrentRow, &'static CurrentRow>(&self.current_row) };
-                    let neurons = unsafe { transmute::<&Vec<NeuronData>, &'static Vec<NeuronData>>(&self.neurons) };
-                    let signer = self.signer.clone();
+                    let current_row =
+                        unsafe { transmute::<&CurrentRow, &'static CurrentRow>(&self.current_row) };
+
+                    let neurons = unsafe {
+                        transmute::<&Vec<NeuronData>, &'static Vec<NeuronData>>(&self.neurons)
+                    };
+
                     let work_queue_receiver = self.work_queue_receiver.clone();
                     let completion_sender = self.completion_sender.clone();
                     let metrics = self.metrics.clone();
@@ -558,7 +564,6 @@ impl Validator {
                         do_work(
                             current_row,
                             neurons,
-                            signer,
                             work_queue_receiver,
                             completion_sender,
                             metrics,
@@ -618,7 +623,8 @@ impl Validator {
             return Ok(());
         }
 
-        self.current_row.ensure_capacity(Self::current_row_file_size(self.step))?;
+        self.current_row
+            .ensure_capacity(Self::current_row_file_size(self.step))?;
 
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
