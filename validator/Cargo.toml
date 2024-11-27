@@ -20,8 +20,6 @@ threadpool = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-dotenv = { workspace = true }
-
 thiserror = { workspace = true }
 
 rusttensor = { workspace = true }
