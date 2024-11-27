@@ -1,4 +1,3 @@
-use crate::validator::connection::release_connection;
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
 use crate::validator::worker::{ProcessingCompletionResult, ProcessingCompletionState};
@@ -32,7 +31,6 @@ pub async fn handle_completion_events(
             ProcessingCompletionState::Completed(processed) => {
                 debug!("Miner {uid} finished assigned work");
 
-                release_connection(neurons, uid);
                 data_processed += processed;
                 *score += processed as u128;
             }

@@ -113,7 +113,7 @@ where
 {
     let free_connection = neurons.iter().enumerate().find_map(|(uid, &ref neuron)| {
         if let Some(mut guard) = neuron.connection.try_lock().ok() {
-            if let ConnectionState::Connected { free: true, .. } = &mut *guard {
+            if let ConnectionState::Connected(_) = &mut *guard {
                 Some((uid as u16, ConnectionGuard::<'b>::new(guard)))
             } else {
                 None
@@ -134,7 +134,7 @@ where
             if let ConnectionState::Disconnected = &*guard {
                 *guard = connect_to_miner(signer, uid as u16, &neuron.info, false, metrics);
 
-                if matches!(*guard, ConnectionState::Connected { .. }) {
+                if matches!(*guard, ConnectionState::Connected(_)) {
                     return (uid as u16, ConnectionGuard::<'b>::new(guard));
                 }
             }
@@ -142,12 +142,4 @@ where
     }
 
     panic!("No suitable miners remaining for this step, crashing to revert to a previous state.");
-}
-
-pub fn release_connection(neurons: &[NeuronData], uid: u16) {
-    let mut guard = neurons[uid as usize].connection.lock().unwrap();
-
-    if let ConnectionState::Connected { free, .. } = &mut *guard {
-        *free = true
-    }
 }

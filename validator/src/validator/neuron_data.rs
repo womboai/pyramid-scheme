@@ -44,14 +44,14 @@ impl AddAssign<u128> for Score {
 }
 
 pub enum ConnectionState {
-    Connected { stream: TcpStream, free: bool },
+    Connected(TcpStream),
     Disconnected,
     Unusable,
 }
 
 impl ConnectionState {
     pub fn connected(stream: TcpStream) -> Self {
-        Self::Connected { stream, free: true }
+        Self::Connected(stream)
     }
 }
 
@@ -61,13 +61,7 @@ pub struct ConnectionGuard<'a> {
 }
 
 impl<'a> ConnectionGuard<'a> {
-    pub fn new(mut guard: MutexGuard<'a, ConnectionState>) -> Self {
-        if let ConnectionState::Connected { free, .. } = &mut *guard {
-            *free = false;
-        } else {
-            panic!("Tried to initialize connection guard out of a non-connected state")
-        }
-
+    pub fn new(guard: MutexGuard<'a, ConnectionState>) -> Self {
         Self {
             guard,
             phantom: PhantomData,
@@ -79,7 +73,7 @@ impl Deref for ConnectionGuard<'_> {
     type Target = TcpStream;
 
     fn deref(&self) -> &Self::Target {
-        let ConnectionState::Connected { stream, .. } = &*self.guard else {
+        let ConnectionState::Connected(stream) = &*self.guard else {
             unreachable!();
         };
 
@@ -89,7 +83,7 @@ impl Deref for ConnectionGuard<'_> {
 
 impl DerefMut for ConnectionGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let ConnectionState::Connected { stream, .. } = &mut *self.guard else {
+        let ConnectionState::Connected(stream) = &mut *self.guard else {
             unreachable!();
         };
 
