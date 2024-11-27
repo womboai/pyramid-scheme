@@ -94,7 +94,7 @@ pub fn worker_count_hint(neurons: &mut [NeuronData]) -> usize {
     for x in neurons.iter_mut() {
         if matches!(
             x.connection.get_mut().unwrap(),
-            ConnectionState::Connected { .. }
+            ConnectionState::Connected(_),
         ) {
             count += 1;
         }
