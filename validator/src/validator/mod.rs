@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
-use std::{fs, thread};
+use std::{fs, mem, thread};
 use std::pin::Pin;
 use tracing::log::warn;
 use tracing::{debug, error, info};
@@ -708,6 +708,18 @@ impl Validator {
 
             if let Err(e) = self.do_step().await {
                 error!("Error during evolution step {step}, {e}", step = self.step);
+            }
+        }
+    }
+}
+
+impl Drop for Validator {
+    fn drop(&mut self) {
+        let threads = mem::take(&mut self.worker_threads);
+
+        for handle in threads.into_iter() {
+            if let Err(e) = handle.join() {
+                warn!("Failed to join a worker thread, {e:?}")
             }
         }
     }
