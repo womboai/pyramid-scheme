@@ -10,7 +10,7 @@ pub trait MemoryMapped {
     where
         Self: Sized;
 
-    fn flush(&self) -> Result<()>;
+    fn flush(&mut self) -> Result<()>;
 
     fn ensure_capacity(&mut self, capacity: u64) -> Result<()>;
 }
@@ -52,14 +52,14 @@ impl MemoryMapped for MemoryMappedFile {
         Self::new(file, path)
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         self.mmap.flush()
     }
 
     fn ensure_capacity(&mut self, capacity: u64) -> Result<()> {
         self.file.set_len(capacity)?;
 
-        self.mmap = unsafe { MmapOptions::new().map_mut(&self.file) }.unwrap();
+        self.mmap = unsafe { MmapOptions::new().map_mut(&self.file) }?;
 
         Ok(())
     }
@@ -111,7 +111,7 @@ impl MemoryMapped for MemoryMappedStorage {
         })
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         self.swap_file.mmap.flush()?;
         fs::copy(&self.swap_file.path, &self.storage_path)?;
 

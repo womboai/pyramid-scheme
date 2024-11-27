@@ -8313,7 +8313,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "dotenv",
  "num-bigint",
  "rule-30-solver-neuron",
  "rusttensor",
@@ -8329,6 +8328,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "dotenv",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -8352,7 +8352,6 @@ dependencies = [
  "axum-extra",
  "axum-range",
  "dirs",
- "dotenv",
  "memmap2",
  "opentelemetry",
  "opentelemetry-appender-tracing",

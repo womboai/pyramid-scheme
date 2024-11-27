@@ -19,9 +19,11 @@ serde_json = { workspace = true }
 
 thiserror = { workspace = true }
 
+rusttensor = { workspace = true }
+
 tracing-subscriber = "0.3.18"
 
-rusttensor = { workspace = true }
+dotenv = "0.15.0"
 
 opentelemetry = "0.26.0"
 opentelemetry-appender-tracing = "0.26.0"
