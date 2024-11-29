@@ -321,7 +321,7 @@ impl Miner {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     if let Err(e) = dotenv() {
         println!("Could not load .env: {e}");
     }
@@ -335,21 +335,13 @@ async fn main() -> Result<()> {
         &*config::HOTKEY_NAME,
     );
 
-    let account_id = match load_key_account_id(&hotkey_location) {
-        Ok(account_id) => account_id,
-        Err(e) => {
-            eprintln!("Error loading hotkey! Please verify that it exists! ({:?})", e);
-            return Err(anyhow::anyhow!(e));
-        }
-    };
+    let account_id = load_key_account_id(&hotkey_location).expect(format!("Error loading hotkey! Please verify that it exists! Looking in: '{:?}'", hotkey_location));
 
     setup_opentelemetry(&account_id, "miner");
 
     let mut miner = Miner::new(account_id).await;
 
     miner.run(*config::PORT).await;
-
-    Ok(())
 }
 
 #[cfg(test)]
