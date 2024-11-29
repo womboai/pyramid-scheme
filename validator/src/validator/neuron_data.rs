@@ -1,6 +1,7 @@
 use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use std::mem::transmute;
 use std::net::TcpStream;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, RwLock};
@@ -44,29 +45,33 @@ impl AddAssign<u128> for Score {
 }
 
 pub enum ConnectionState {
-    Connected { stream: TcpStream, free: bool },
+    Connected(TcpStream),
     Disconnected,
     Unusable,
 }
 
 impl ConnectionState {
     pub fn connected(stream: TcpStream) -> Self {
-        Self::Connected { stream, free: true }
+        Self::Connected(stream)
     }
 }
 
-pub struct ConnectionGuard<'a> {
-    guard: MutexGuard<'a, ConnectionState>,
-    phantom: PhantomData<&'a mut TcpStream>,
+pub struct ConnectionGuard {
+    // Incorrect lifetimes, but must live within threads
+    pub guard: MutexGuard<'static, ConnectionState>,
+    phantom: PhantomData<&'static mut TcpStream>,
 }
 
-impl<'a> ConnectionGuard<'a> {
-    pub fn new(mut guard: MutexGuard<'a, ConnectionState>) -> Self {
-        if let ConnectionState::Connected { free, .. } = &mut *guard {
-            *free = false;
-        } else {
-            panic!("Tried to initialize connection guard out of a non-connected state")
-        }
+unsafe impl Send for ConnectionGuard {}
+
+impl ConnectionGuard {
+    pub fn new<'a>(guard: MutexGuard<'a, ConnectionState>) -> Self {
+        let guard = unsafe {
+            // UNSAFE: Extend lifetime to allow connection guard to be used between threads
+            transmute::<MutexGuard<'a, ConnectionState>, MutexGuard<'static, ConnectionState>>(
+                guard,
+            )
+        };
 
         Self {
             guard,
@@ -75,11 +80,11 @@ impl<'a> ConnectionGuard<'a> {
     }
 }
 
-impl Deref for ConnectionGuard<'_> {
+impl Deref for ConnectionGuard {
     type Target = TcpStream;
 
     fn deref(&self) -> &Self::Target {
-        let ConnectionState::Connected { stream, .. } = &*self.guard else {
+        let ConnectionState::Connected(stream) = &*self.guard else {
             unreachable!();
         };
 
@@ -87,9 +92,9 @@ impl Deref for ConnectionGuard<'_> {
     }
 }
 
-impl DerefMut for ConnectionGuard<'_> {
+impl DerefMut for ConnectionGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let ConnectionState::Connected { stream, .. } = &mut *self.guard else {
+        let ConnectionState::Connected(stream) = &mut *self.guard else {
             unreachable!();
         };
 

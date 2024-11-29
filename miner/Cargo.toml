@@ -19,8 +19,6 @@ tracing = { workspace = true }
 
 threadpool = { workspace = true }
 
-dotenv = { workspace = true }
-
 thiserror = { workspace = true }
 
 rusttensor = { workspace = true }

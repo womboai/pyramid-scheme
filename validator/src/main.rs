@@ -5,9 +5,8 @@
 use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
 use axum::Router;
-use dotenv::dotenv;
 use neuron::updater::Updater;
-use neuron::{config, setup_opentelemetry};
+use neuron::{config, load_env, setup_opentelemetry};
 use tracing::info;
 
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
@@ -34,11 +33,9 @@ async fn api_main() {
 
 #[tokio::main]
 async fn main() {
-    let metrics = validator::metrics::setup_metrics();
+    load_env();
 
-    if let Err(e) = dotenv() {
-        println!("Could not load .env: {e}");
-    }
+    let metrics = validator::metrics::setup_metrics();
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),

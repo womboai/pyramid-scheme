@@ -9,10 +9,9 @@ use std::{io, slice};
 
 use crate::signature_checking::info_matches;
 use anyhow::Result;
-use dotenv::dotenv;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, setup_opentelemetry};
+use neuron::{config, load_env, setup_opentelemetry, subtensor};
 use rusttensor::api::apis;
 use rusttensor::rpc::call_runtime_api_decoded;
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -75,7 +74,7 @@ impl Solver {
         }
     }
 
-    fn solve(&mut self, data: &mut [AlignedChunk], offset: usize, read_len: usize) {
+    fn solve_offset(&mut self, data: &mut [AlignedChunk], offset: usize, read_len: usize) {
         if read_len == 0 {
             return;
         }
@@ -101,13 +100,13 @@ impl Solver {
                 self.solve_chunked::<1>(data_u8);
             }
 
-            self.solve(data, offset + read_len - read_len % 8, read_len % 8);
+            self.solve_offset(data, offset + read_len - read_len % 8, read_len % 8);
         } else if data_u8.len() < 8 * 4 {
             unsafe {
                 self.solve_chunked::<2>(data_u8);
             }
 
-            self.solve(
+            self.solve_offset(
                 data,
                 offset + read_len - read_len % (8 * 2),
                 read_len % (8 * 2),
@@ -117,12 +116,18 @@ impl Solver {
                 self.solve_chunked::<4>(data_u8);
             }
 
-            self.solve(
+            self.solve_offset(
                 data,
                 offset + read_len - read_len % (8 * 4),
                 read_len % (8 * 4),
             );
         }
+    }
+
+    fn solve(&mut self, data: &mut [AlignedChunk], read_len: usize) {
+        self.solve_offset(data, 0, read_len);
+
+        self.last = 0;
     }
 }
 
@@ -162,7 +167,7 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
             break;
         }
 
-        solver.solve(&mut buffer, 0, len);
+        solver.solve(&mut buffer, len);
         solver.last = 0;
 
         let mut written = 0;
@@ -203,7 +208,7 @@ struct Miner {
 
 impl Miner {
     async fn new(account_id: AccountId) -> Self {
-        let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+        let subtensor = subtensor().await.unwrap();
 
         let current_block = subtensor.blocks().at_latest().await.unwrap();
         let last_block_fetch = Instant::now();
@@ -322,9 +327,7 @@ impl Miner {
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = dotenv() {
-        println!("Could not load .env: {e}");
-    }
+    load_env();
 
     let updater = Updater::new(Duration::from_secs(3600));
     updater.spawn();
@@ -366,7 +369,7 @@ mod test {
         for i in 0..STEPS - 1 {
             let byte_count = (i * 2 + 3).div_ceil(8);
 
-            solver.solve(&mut result, 0, byte_count as usize);
+            solver.solve(&mut result, byte_count as usize);
 
             expected ^= expected.clone() << 1 | expected.clone() << 2;
 

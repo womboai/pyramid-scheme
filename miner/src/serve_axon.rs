@@ -1,10 +1,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
-use dotenv::dotenv;
-use neuron::config;
+use neuron::{config, load_env, subtensor};
 use rusttensor::axon::{serve_axon_payload, AxonProtocol};
-use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
 
 #[derive(Parser)]
@@ -15,9 +13,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = dotenv() {
-        println!("Could not load .env: {e}");
-    }
+    load_env();
 
     let args: Cli = Cli::parse();
 
@@ -31,7 +27,7 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    let subtensor = Subtensor::from_url(&*config::CHAIN_ENDPOINT).await.unwrap();
+    let subtensor = subtensor().await.unwrap();
 
     let payload = serve_axon_payload(
         *config::NETUID,
