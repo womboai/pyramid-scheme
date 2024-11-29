@@ -338,7 +338,7 @@ async fn main() {
         &*config::HOTKEY_NAME,
     );
 
-    let account_id = load_key_account_id(&hotkey_location).unwrap();
+    let account_id = load_key_account_id(&hotkey_location).expect(format!("Error loading hotkey! Please verify that it exists! Looking in: '{:?}'", hotkey_location));
 
     setup_opentelemetry(&account_id, "miner");
 
