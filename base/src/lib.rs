@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::cell::LazyCell;
 use anyhow::Result;
 use dotenv::from_filename;
 use opentelemetry::{KeyValue, Value as LogValue};
@@ -10,6 +11,7 @@ use opentelemetry_sdk::Resource;
 use rusttensor::subtensor::Subtensor;
 use rusttensor::AccountId;
 use std::env;
+use std::iter::Iterator;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -20,6 +22,11 @@ pub mod config;
 pub mod updater;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &'static str = "http://18.215.170.244:4317";
+
+static VERSIONS: LazyCell<Vec<u8>> = LazyCell::new(|| {
+    env!("CARGO_PKG_VERSION").split('.').map(|n| n.parse().unwrap()).collect::<Vec<_>>()
+});
+
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("Compilation is only allowed for 64-bit targets");

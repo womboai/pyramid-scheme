@@ -36,6 +36,7 @@ fn as_u8_mut<T>(data: &mut [T]) -> &mut [u8] {
 
 // Ensure that we're always aligned for SIMD access
 #[repr(transparent)]
+#[derive(Clone)]
 struct AlignedChunk(u64x4);
 
 #[derive(Default)]
@@ -126,8 +127,6 @@ impl Solver {
 
     fn solve(&mut self, data: &mut [AlignedChunk], read_len: usize) {
         self.solve_offset(data, 0, read_len);
-
-        self.last = 0;
     }
 }
 
@@ -168,7 +167,6 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
         }
 
         solver.solve(&mut buffer, len);
-        solver.last = 0;
 
         let mut written = 0;
 

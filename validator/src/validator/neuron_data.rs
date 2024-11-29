@@ -1,10 +1,12 @@
+use std::cell::UnsafeCell;
 use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::mem::transmute;
 use std::net::TcpStream;
+use std::num::NonZeroU8;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
-use std::sync::{Mutex, MutexGuard, RwLock};
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Score {
@@ -105,7 +107,9 @@ impl DerefMut for ConnectionGuard {
 pub struct NeuronData {
     pub info: NeuronInfoLite,
 
-    pub score: RwLock<Score>,
+    pub weight: NonZeroU8,
+    pub score: UnsafeCell<Score>,
+
     pub connection: Mutex<ConnectionState>,
 }
 

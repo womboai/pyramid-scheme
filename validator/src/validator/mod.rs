@@ -6,7 +6,7 @@ use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
 
 use crate::validator::completion_event_handler::handle_completion_events;
-use crate::validator::connection::{connect_to_miner, worker_count_hint};
+use crate::validator::connection::{connect_to_miner, worker_count_hint, worker_weights};
 use crate::validator::evolution_step::normalize_pair;
 use crate::validator::worker::{do_work, ProcessingCompletionResult};
 use anyhow::Result;
@@ -28,6 +28,7 @@ use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
+use std::num::NonZeroU8;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -82,6 +83,7 @@ unsafe impl Sync for CurrentRow {}
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
     score: Score,
+    weight: Option<NonZeroU8>,
     hotkey: AccountId,
 }
 
@@ -98,6 +100,7 @@ impl ValidatorState {
             .map(|hotkey| KeyScoreInfo {
                 hotkey,
                 score: Score::default(),
+                weight: Some(NonZeroU8::MAX),
             })
             .collect();
 
@@ -256,6 +259,7 @@ impl Validator {
                         if state_info.is_some() && state_info.unwrap().hotkey == info.hotkey {
                             NeuronData {
                                 score: state_info.unwrap().score.into(),
+                                weight: state_info.unwrap().weight.unwrap_or(NonZeroU8::MAX),
                                 connection: connect_to_miner(
                                     &signer,
                                     neuron_info.uid.0,
@@ -269,6 +273,7 @@ impl Validator {
                         } else {
                             NeuronData {
                                 score: Score::default().into(),
+                                weight: NonZeroU8::MAX,
                                 connection: connect_to_miner(
                                     &signer,
                                     neuron_info.uid.0,
@@ -359,7 +364,8 @@ impl Validator {
                 .iter_mut()
                 .map(|data| KeyScoreInfo {
                     hotkey: data.info.hotkey.clone(),
-                    score: *data.score.get_mut().unwrap(),
+                    score: *data.score.get_mut(),
+                    weight: Some(data.weight),
                 })
                 .collect(),
             step: self.step,
@@ -400,14 +406,14 @@ impl Validator {
 
         let max_score: u128 = neurons
             .iter_mut()
-            .map(|info| u128::from(*info.score.get_mut().unwrap()))
+            .map(|info| u128::from(*info.score.get_mut()))
             .max()
             .expect("Neurons should never be empty at this point, thus max should never be None");
 
         let scores = neurons
             .iter_mut()
             .map(|neuron| {
-                let normalized_score = match *neuron.score.get_mut().unwrap() {
+                let normalized_score = match *neuron.score.get_mut() {
                     Score::Legitimate(score) => {
                         if max_score == 0 {
                             u16::MAX
@@ -485,6 +491,7 @@ impl Validator {
 
                     self.neurons[i] = NeuronData {
                         score: Score::default().into(),
+                        weight: NonZeroU8::MAX,
                         connection: connect_to_miner(
                             &self.signer,
                             self.uid,
@@ -506,7 +513,7 @@ impl Validator {
                             self.uid,
                             &neurons[i],
                             matches!(
-                                *neuron.score.get_mut().expect("Lock poisoned"),
+                                *neuron.score.get_mut(),
                                 Score::Cheater
                             ),
                             &self.metrics,
@@ -528,6 +535,7 @@ impl Validator {
 
                     NeuronData {
                         score: Score::default().into(),
+                        weight: NonZeroU8::MAX,
                         connection: connect_to_miner(
                             &self.signer,
                             self.uid,
@@ -607,9 +615,9 @@ impl Validator {
             true
         };
 
-        let connection_count = worker_count_hint(&mut self.neurons) as u64;
+        let worker_weights = worker_weights(&mut self.neurons);
 
-        if connection_count == 0 {
+        if worker_weights.is_empty() {
             if should_sleep {
                 let blocks = *config::EPOCH_LENGTH - elapsed_blocks;
 
@@ -629,17 +637,25 @@ impl Validator {
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        info!("Splitting work into {connection_count} chunks");
+        info!("Splitting work into {} chunks", worker_weights.len());
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
 
-        let chunk_size = byte_count.div_ceil(connection_count);
+        let chunk_size = byte_count.div_ceil(worker_weights.len() as u64);
 
-        for index in 0..connection_count {
-            let start = index * chunk_size;
-            let end = min((index + 1) * chunk_size, byte_count);
+        let weight_sum: u32 = worker_weights.iter().copied().map(|x| x as u32).sum();
 
-            let range = start..end;
+        let mut position = 0;
+
+        for weight in &worker_weights {
+            let chunk_size = (byte_count * *weight as u64) / weight_sum as u64;
+
+            if chunk_size == 0 {
+                continue;
+            }
+
+            let end = min(position + chunk_size, byte_count);
+            let range = position..end;
 
             debug!("Adding {range:?} to work queue");
 
@@ -650,18 +666,26 @@ impl Validator {
             if end == byte_count {
                 break;
             }
+
+            position = end;
         }
 
-        handle_completion_events(
+        let weights = handle_completion_events(
             &self.neurons,
-            self.completion_receiver.clone(),
-            self.work_queue_sender.clone(),
+            &self.completion_receiver,
+            &self.work_queue_sender,
             byte_count,
-            self.metrics.clone(),
+            &self.metrics,
         )
         .await;
 
-        for i in 0..connection_count - 1 {
+        for (uid, weight) in weights {
+            let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
+
+            self.neurons[uid as usize].weight = weight;
+        }
+
+        for i in 0..worker_weights.len() as u64 - 1 {
             let end = ((i + 1) * chunk_size) as usize;
 
             if end >= byte_count as usize {
