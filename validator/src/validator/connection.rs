@@ -1,14 +1,14 @@
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData};
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
-use neuron::config;
+use neuron::{config, SPEC_VERSION};
 use rusttensor::rpc::types::NeuronInfoLite;
 use rusttensor::sign::sign_message;
 use rusttensor::wallet::Signer;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub fn connect_to_miner(
     signer: &Signer,
@@ -70,6 +70,22 @@ pub fn connect_to_miner(
 
             if let Err(e) = stream.write(&signature) {
                 warn!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
+
+                return ConnectionState::Unusable;
+            }
+
+            let mut version_buffer = [0u8; size_of::<u32>()];
+
+            if let Err(e) = stream.read(&mut version_buffer) {
+                warn!("Miner {uid} failed to report their version, {e}");
+
+                return ConnectionState::Unusable;
+            }
+
+            let version = u32::from_le_bytes(version_buffer);
+
+            if version != SPEC_VERSION {
+                warn!("Miner is using incorrect spec, expected {SPEC_VERSION} but got {version}");
 
                 return ConnectionState::Unusable;
             }

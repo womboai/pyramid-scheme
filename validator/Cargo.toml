@@ -1,6 +1,6 @@
 [package]
-name = "rule-30-solver-validator"
-version = "0.1.0"
+name = "pyramid-scheme-validator"
+version = "0.2.0"
 edition = "2021"
 
 [[bin]]
@@ -37,4 +37,4 @@ axum-extra = "0.9.4"
 axum-range = "0.4.0"
 axum-debug-macros = "0.1.0"
 
-rule-30-solver-neuron = { path = "../base" }
+pyramid-scheme-neuron = { path = "../base" }

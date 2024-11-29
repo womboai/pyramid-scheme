@@ -8042,6 +8042,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyramid-scheme-miner"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "num-bigint",
+ "pyramid-scheme-neuron",
+ "rusttensor",
+ "thiserror 1.0.69",
+ "threadpool",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pyramid-scheme-neuron"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "dotenv",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "rusttensor",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pyramid-scheme-validator"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "axum-debug-macros",
+ "axum-extra",
+ "axum-range",
+ "dirs",
+ "memmap2",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "priority-queue",
+ "pyramid-scheme-neuron",
+ "rusttensor",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "threadpool",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8317,68 +8379,6 @@ name = "ruint-macro"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
-
-[[package]]
-name = "rule-30-solver-miner"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "num-bigint",
- "rule-30-solver-neuron",
- "rusttensor",
- "thiserror 1.0.69",
- "threadpool",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rule-30-solver-neuron"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs",
- "dotenv",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
- "rusttensor",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "rule-30-solver-validator"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum 0.7.9",
- "axum-debug-macros",
- "axum-extra",
- "axum-range",
- "dirs",
- "memmap2",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
- "priority-queue",
- "rule-30-solver-neuron",
- "rusttensor",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "threadpool",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "rustc-demangle"

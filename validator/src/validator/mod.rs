@@ -1,4 +1,4 @@
-use neuron::{config, subtensor};
+use neuron::{config, subtensor, INTEGRAL_VERSION};
 use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
@@ -40,9 +40,8 @@ pub mod metrics;
 mod neuron_data;
 mod worker;
 
-const WEIGHTS_VERSION: u64 = 1;
 const GROW_BY: u64 = 1024 * 1024 * 8;
-const DATA_SPEC_VERSION: u64 = 1;
+const DATA_SPEC_VERSION: u32 = 2;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -83,15 +82,26 @@ unsafe impl Sync for CurrentRow {}
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
     score: Score,
-    weight: Option<NonZeroU8>,
+    #[serde(default = "default_weight")]
+    weight: NonZeroU8,
     hotkey: AccountId,
+}
+
+const fn default_weight() -> NonZeroU8 {
+    NonZeroU8::MAX
+}
+
+const fn default_version() -> u32 {
+    0
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ValidatorState {
     step: u64,
     key_info: Vec<KeyScoreInfo>,
-    version: Option<u64>,
+
+    #[serde(default = "default_version")]
+    version: u32,
 }
 
 impl ValidatorState {
@@ -100,14 +110,14 @@ impl ValidatorState {
             .map(|hotkey| KeyScoreInfo {
                 hotkey,
                 score: Score::default(),
-                weight: Some(NonZeroU8::MAX),
+                weight: NonZeroU8::MAX,
             })
             .collect();
 
         Self {
             step: 1,
             key_info,
-            version: Some(DATA_SPEC_VERSION),
+            version: DATA_SPEC_VERSION,
         }
     }
 }
@@ -117,7 +127,7 @@ impl Default for ValidatorState {
         Self {
             step: 1,
             key_info: Vec::new(),
-            version: Some(DATA_SPEC_VERSION),
+            version: DATA_SPEC_VERSION,
         }
     }
 }
@@ -204,11 +214,7 @@ impl Validator {
         let mut state =
             Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
 
-        let valid_state = if let Some(version) = state.version {
-            version == DATA_SPEC_VERSION
-        } else {
-            false
-        };
+        let valid_state = state.version == DATA_SPEC_VERSION;
 
         fs::create_dir_all("state").unwrap();
 
@@ -259,7 +265,7 @@ impl Validator {
                         if state_info.is_some() && state_info.unwrap().hotkey == info.hotkey {
                             NeuronData {
                                 score: state_info.unwrap().score.into(),
-                                weight: state_info.unwrap().weight.unwrap_or(NonZeroU8::MAX),
+                                weight: state_info.unwrap().weight,
                                 connection: connect_to_miner(
                                     &signer,
                                     neuron_info.uid.0,
@@ -365,11 +371,11 @@ impl Validator {
                 .map(|data| KeyScoreInfo {
                     hotkey: data.info.hotkey.clone(),
                     score: *data.score.get_mut(),
-                    weight: Some(data.weight),
+                    weight: data.weight,
                 })
                 .collect(),
             step: self.step,
-            version: Some(DATA_SPEC_VERSION),
+            version: DATA_SPEC_VERSION,
         };
 
         let json = serde_json::to_string(&state)?;
@@ -432,7 +438,7 @@ impl Validator {
             .collect();
 
         let payload =
-            set_weights_payload(*config::NETUID, scores, DATA_SPEC_VERSION + WEIGHTS_VERSION);
+            set_weights_payload(*config::NETUID, scores, *INTEGRAL_VERSION);
 
         subtensor
             .tx()

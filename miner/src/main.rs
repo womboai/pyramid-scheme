@@ -11,7 +11,7 @@ use crate::signature_checking::info_matches;
 use anyhow::Result;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_opentelemetry, subtensor};
+use neuron::{config, load_env, setup_opentelemetry, subtensor, SPEC_VERSION};
 use rusttensor::api::apis;
 use rusttensor::rpc::call_runtime_api_decoded;
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -20,7 +20,7 @@ use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::{hotkey_location, load_key_account_id};
 use rusttensor::{AccountId, Block, BlockNumber};
 use threadpool::ThreadPool;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 mod signature_checking;
 
@@ -188,10 +188,12 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
             }
         }
 
+        debug!("Solved {written} bytes for validator {validator_uid}");
+
         total_solved += written;
     }
 
-    info!("Solved {total_solved} bytes for validator {validator_uid}")
+    info!("Disconnected from validator {validator_uid}, solved {total_solved} total bytes");
 }
 
 struct Miner {
@@ -315,6 +317,10 @@ impl Miner {
                 if !signature_matches {
                     info!("{address} sent a signed message with an incorrect signature");
                     continue;
+                }
+
+                if let Err(e) = stream.write(&SPEC_VERSION.to_le_bytes()) {
+                    warn!("Failed to send version to validator {}, {}", message.validator.uid, e);
                 }
 
                 pool.execute(move || handle_connection(stream, message.validator.uid));
