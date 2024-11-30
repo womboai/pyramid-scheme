@@ -73,6 +73,7 @@ fn handle_connection(
     };
 
     let mut total_processed = 0;
+    let mut last = 0;
 
     let time_started = Instant::now();
 
@@ -184,16 +185,11 @@ fn handle_connection(
                 let read_chunk_range = range.start..range.start + len;
 
                 if should_validate {
-                    info!("Verifying results of {uid}");
-                    let last = if range.start == start {
-                        0
-                    } else {
-                        current_row[range.start - 1]
-                    };
+                    info!("Verifying results of miner {uid}");
 
                     if !verify_result(&current_row[range.start..range.start + len], last, &buffer[..len])
                     {
-                        info!("{uid} marked as cheater");
+                        info!("Miner {uid} marked as cheater");
                         metrics.cheater_count.add(1, &[]);
 
                         completion_events
@@ -207,6 +203,7 @@ fn handle_connection(
                     }
                 }
 
+                last = current_row[read_chunk_range.end - 1];
                 (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                 read += len;
             }
@@ -234,7 +231,7 @@ pub fn do_work(
 ) {
     loop {
         let Ok(range) = work_queue_receiver.try_recv() else {
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(1));
             continue;
         };
 

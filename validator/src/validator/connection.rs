@@ -8,7 +8,7 @@ use rusttensor::wallet::Signer;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 pub fn connect_to_miner(
     signer: &Signer,

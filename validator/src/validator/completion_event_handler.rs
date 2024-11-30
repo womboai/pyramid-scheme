@@ -19,7 +19,7 @@ pub async fn handle_completion_events(
     while data_processed < byte_count {
         let Ok(event): Result<ProcessingCompletionResult, _> = completion_receiver.try_recv()
         else {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
             continue;
         };
 
@@ -101,9 +101,16 @@ pub async fn handle_completion_events(
         uid_times.push((uid, time_per_byte));
     }
 
-    println!("{uid_times:?}");
-
     let range = maximum_time - minimum_time;
 
-    uid_times.iter().map(|(uid, time)| (*uid, u8::MAX - ((u8::MAX as u128 * (*time - minimum_time)) / range) as u8)).collect::<Vec<_>>()
+    uid_times.iter().map(|(uid, time)| {
+        if range == 0 {
+            return (*uid, u8::MAX);
+        }
+
+        let contribution_time = u8::MAX as u128 * (*time - minimum_time);
+        let inverse_weight = contribution_time / range;
+
+        (*uid, u8::MAX - inverse_weight as u8)
+    }).collect::<Vec<_>>()
 }

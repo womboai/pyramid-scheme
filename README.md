@@ -115,7 +115,7 @@ And then run either the miner or validator binary
 cargo run --release --bin miner
 
 # With PM2
-pm2 start cargo --name rule-30-miner --interpreter none -- run --release  --bin miner
+pm2 start cargo --name pyramid-scheme-miner --interpreter none -- run --release  --bin miner
 ```
 
 ### Running a validator
@@ -124,7 +124,7 @@ pm2 start cargo --name rule-30-miner --interpreter none -- run --release  --bin 
 cargo run --release --bin validator
 
 # With PM2
-pm2 start cargo --name rule-30-validator --interpreter none -- run --release --bin validator
+pm2 start cargo --name pyramid-scheme-validator --interpreter none -- run --release --bin validator
 ```
 
 ## Roadmap

@@ -277,6 +277,8 @@ impl Miner {
 
         listener.set_nonblocking(true).unwrap();
 
+        info!("Awaiting connections");
+
         loop {
             let now = Instant::now();
 
