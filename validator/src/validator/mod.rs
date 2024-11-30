@@ -256,7 +256,7 @@ impl Validator {
         }
 
         let neurons = thread::scope(|scope| {
-            neurons
+            let handles = neurons
                 .into_iter()
                 .map(|info| {
                     scope.spawn(|| {
@@ -293,8 +293,9 @@ impl Validator {
                         }
                     })
                 })
-                .map(|handle| handle.join().unwrap())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+
+            handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
         });
 
         let mut neurons = Box::pin(neurons);
@@ -674,6 +675,12 @@ impl Validator {
             }
 
             position = end;
+        }
+
+        if position != byte_count {
+            self.work_queue_sender
+                .send(position..byte_count)
+                .expect("Work queue channel should not be closed");
         }
 
         let weights = handle_completion_events(

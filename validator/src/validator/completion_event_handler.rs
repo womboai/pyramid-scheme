@@ -17,8 +17,7 @@ pub async fn handle_completion_events(
     let mut data_processed = 0;
 
     while data_processed < byte_count {
-        let Ok(event): Result<ProcessingCompletionResult, _> = completion_receiver.try_recv()
-        else {
+        let Ok(event) = completion_receiver.try_recv() else {
             tokio::time::sleep(Duration::from_millis(1)).await;
             continue;
         };

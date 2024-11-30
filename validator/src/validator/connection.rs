@@ -77,7 +77,7 @@ pub fn connect_to_miner(
             let mut version_buffer = [0u8; size_of::<u32>()];
 
             if let Err(e) = stream.read(&mut version_buffer) {
-                warn!("Miner {uid} failed to report their version, {e}");
+                warn!("Miner {uid} failed to report their version, {e}", uid = neuron.uid.0);
 
                 return ConnectionState::Unusable;
             }
@@ -85,7 +85,7 @@ pub fn connect_to_miner(
             let version = u32::from_le_bytes(version_buffer);
 
             if version != SPEC_VERSION {
-                warn!("Miner is using incorrect spec, expected {SPEC_VERSION} but got {version}");
+                warn!("Miner {uid} is using incorrect spec, expected {SPEC_VERSION} but got {version}", uid = neuron.uid.0);
 
                 return ConnectionState::Unusable;
             }
