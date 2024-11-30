@@ -1,11 +1,11 @@
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, ConnectionState, NeuronData};
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
-use neuron::config;
+use neuron::{config, SPEC_VERSION};
 use rusttensor::rpc::types::NeuronInfoLite;
 use rusttensor::sign::sign_message;
 use rusttensor::wallet::Signer;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -74,6 +74,22 @@ pub fn connect_to_miner(
                 return ConnectionState::Unusable;
             }
 
+            let mut version_buffer = [0u8; size_of::<u32>()];
+
+            if let Err(e) = stream.read(&mut version_buffer) {
+                warn!("Miner {uid} failed to report their version, {e}");
+
+                return ConnectionState::Unusable;
+            }
+
+            let version = u32::from_le_bytes(version_buffer);
+
+            if version != SPEC_VERSION {
+                warn!("Miner is using incorrect spec, expected {SPEC_VERSION} but got {version}");
+
+                return ConnectionState::Unusable;
+            }
+
             metrics.connected_miners.add(1, &[]);
             ConnectionState::connected(stream)
         }
@@ -103,8 +119,29 @@ pub fn worker_count_hint(neurons: &mut [NeuronData]) -> usize {
     count
 }
 
+pub fn worker_weights(neurons: &mut [NeuronData]) -> Vec<u8> {
+    let mut weights = Vec::with_capacity(neurons.len());
+
+    for x in neurons.iter_mut() {
+        if matches!(
+            x.connection.get_mut().unwrap(),
+            ConnectionState::Connected(_),
+        ) {
+            weights.push(x.weight.get());
+        }
+    }
+
+    weights.sort_by(|x, y| x.cmp(y).reverse());
+
+    weights
+}
+
 pub fn find_suitable_connection(neurons: &[NeuronData]) -> (u16, ConnectionGuard) {
-    let free_connection = neurons.iter().enumerate().find_map(|(uid, &ref neuron)| {
+    let mut references = neurons.iter().collect::<Vec<_>>();
+
+    references.sort_by_key(|neuron| u8::MAX - neuron.weight.get());
+
+    let free_connection = references.iter().copied().enumerate().find_map(|(uid, &ref neuron)| {
         if let Some(mut guard) = neuron.connection.try_lock().ok() {
             if let ConnectionState::Connected(_) = &mut *guard {
                 Some((uid as u16, ConnectionGuard::new(guard)))
@@ -122,8 +159,8 @@ pub fn find_suitable_connection(neurons: &[NeuronData]) -> (u16, ConnectionGuard
 
     info!("No suitable miners found, waiting for connections");
 
-    for (uid, neuron) in neurons.iter().enumerate() {
-        let mut guard = neuron.connection.lock().unwrap();
+    for (uid, neuron) in references.iter().copied().enumerate() {
+        let guard = neuron.connection.lock().unwrap();
 
         if let ConnectionState::Connected(_) = &*guard {
             return (uid as u16, ConnectionGuard::new(guard));

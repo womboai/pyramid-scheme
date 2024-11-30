@@ -1,6 +1,7 @@
 extern crate core;
 
-use anyhow::Result;
+use std::convert::Into;
+use anyhow::{anyhow, Result};
 use dotenv::from_filename;
 use opentelemetry::{KeyValue, Value as LogValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -10,6 +11,10 @@ use opentelemetry_sdk::Resource;
 use rusttensor::subtensor::Subtensor;
 use rusttensor::AccountId;
 use std::env;
+use std::iter::Iterator;
+use std::ops::Deref;
+use std::str::FromStr;
+use std::sync::LazyLock;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -20,6 +25,50 @@ pub mod config;
 pub mod updater;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &'static str = "http://18.215.170.244:4317";
+
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
+#[repr(C)]
+pub struct Version {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl FromStr for Version {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut parts = s.split('.').map(|n| n.parse().unwrap());
+
+        let major = parts.next().unwrap_or(0);
+        let minor = parts.next().unwrap_or(0);
+        let patch = parts.next().unwrap_or(0);
+
+        if parts.next().is_some() {
+            return Err(anyhow!("Crate version string {s} has too many parts, needs to be x.y.z"));
+        }
+
+        Ok(Version {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
+impl From<&Version> for u64 {
+    fn from(value: &Version) -> Self {
+        (value.major as u64) << 32 | (value.minor as u64) << 16 | (value.patch as u64)
+    }
+}
+
+pub const SPEC_VERSION: u32 = 1;
+
+pub const VERSION_STRING: &'static str = env!("CARGO_PKG_VERSION");
+
+pub static VERSION: LazyLock<Version> = LazyLock::new(|| Version::from_str(VERSION_STRING).unwrap());
+
+pub static INTEGRAL_VERSION: LazyLock<u64> = LazyLock::new(|| VERSION.deref().into());
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("Compilation is only allowed for 64-bit targets");

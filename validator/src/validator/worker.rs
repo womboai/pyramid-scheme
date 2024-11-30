@@ -3,7 +3,6 @@ use crate::validator::memory_storage::MemoryMappedStorage;
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, NeuronData};
 use crate::validator::CurrentRow;
-use rusttensor::wallet::Signer;
 use std::cmp::min;
 use std::io::{Read, Write};
 use std::ops::Range;
@@ -12,13 +11,14 @@ use std::sync::mpmc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 const VALIDATION_CHANCE: f32 = 0.3;
 
 pub enum ProcessingCompletionState {
-    Completed(u64),
-    Failed(u64, Range<u64>, ConnectionGuard),
+    Completed(u64, Duration),
+    Failed(u64, Range<u64>, ConnectionGuard, Duration),
     Cheated(Range<u64>),
 }
 
@@ -27,9 +27,7 @@ pub struct ProcessingCompletionResult {
     pub state: ProcessingCompletionState,
 }
 
-fn verify_result(original: &[u8], result: &[u8]) -> bool {
-    let mut last = 0;
-
+fn verify_result(original: &[u8], mut last: u8, result: &[u8]) -> bool {
     for (i, x) in original.iter().enumerate() {
         let expected = x ^ (x << 1 | x << 2 | last >> 7 | last >> 6);
 
@@ -75,6 +73,9 @@ fn handle_connection(
     };
 
     let mut total_processed = 0;
+    let mut last = 0;
+
+    let time_started = Instant::now();
 
     for i in 0..iterations {
         let mut processed = 0;
@@ -96,6 +97,7 @@ fn handle_connection(
                                     total_processed,
                                     start + total_processed..end,
                                     connection,
+                                    time_started.elapsed(),
                                 ),
                             })
                             .unwrap();
@@ -115,6 +117,7 @@ fn handle_connection(
                                 total_processed,
                                 start + total_processed..end,
                                 connection,
+                                time_started.elapsed(),
                             ),
                         })
                         .unwrap();
@@ -150,6 +153,7 @@ fn handle_connection(
                                         total_processed,
                                         start + total_processed..end,
                                         connection,
+                                        time_started.elapsed(),
                                     ),
                                 })
                                 .unwrap();
@@ -169,6 +173,7 @@ fn handle_connection(
                                     total_processed,
                                     start + total_processed..end,
                                     connection,
+                                    time_started.elapsed(),
                                 ),
                             })
                             .unwrap();
@@ -180,10 +185,11 @@ fn handle_connection(
                 let read_chunk_range = range.start..range.start + len;
 
                 if should_validate {
-                    info!("Verifying results of {uid}");
-                    if !verify_result(&current_row[range.start..range.start + len], &buffer[..len])
+                    info!("Verifying results of miner {uid}");
+
+                    if !verify_result(&current_row[range.start..range.start + len], last, &buffer[..len])
                     {
-                        info!("{uid} marked as cheater");
+                        info!("Miner {uid} marked as cheater");
                         metrics.cheater_count.add(1, &[]);
 
                         completion_events
@@ -197,6 +203,7 @@ fn handle_connection(
                     }
                 }
 
+                last = current_row[read_chunk_range.end - 1];
                 (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
                 read += len;
             }
@@ -210,7 +217,7 @@ fn handle_connection(
     completion_events
         .send(ProcessingCompletionResult {
             uid,
-            state: ProcessingCompletionState::Completed(total_processed),
+            state: ProcessingCompletionState::Completed(total_processed, time_started.elapsed()),
         })
         .unwrap();
 }
@@ -224,7 +231,7 @@ pub fn do_work(
 ) {
     loop {
         let Ok(range) = work_queue_receiver.try_recv() else {
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(1));
             continue;
         };
 
