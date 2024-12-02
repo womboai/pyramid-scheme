@@ -103,7 +103,7 @@ pub async fn handle_completion_events(
 
     let range = maximum_time - minimum_time;
 
-    let weights = vec![0u8; neuron_count];
+    let mut weights = vec![0u8; neuron_count];
 
     for (uid, time) in uid_times {
         if range == 0 {
