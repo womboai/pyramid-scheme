@@ -693,10 +693,10 @@ impl Validator {
         )
         .await;
 
-        for (uid, weight) in weights.iter().enumerate() {
+        for (uid, weight) in weights.into_iter().enumerate() {
             let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
 
-            self.neurons[uid as usize].weight = weight;
+            self.neurons[uid].weight = weight;
         }
 
         for i in 0..worker_weights.len() as u64 - 1 {
