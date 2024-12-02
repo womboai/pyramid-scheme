@@ -110,10 +110,10 @@ pub async fn handle_completion_events(
             return (*uid, u8::MAX);
         }
 
-        let contribution_time = u8::MAX as u128 * (*time - minimum_time);
+        let contribution_time = u8::MAX as u128 * (time - minimum_time);
         let inverse_weight = contribution_time / range;
 
-        weights[*uid as usize] = u8::MAX - inverse_weight as u8;
+        weights[uid as usize] = u8::MAX - inverse_weight as u8;
     }
 
     weights
