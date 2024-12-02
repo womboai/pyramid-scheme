@@ -60,10 +60,10 @@ pub async fn handle_completion_events(
                     .send(remaining)
                     .expect("Work queue channel should not be closed");
             }
-            ProcessingCompletionState::Cheated(range) => {
+            ProcessingCompletionState::Cheated(range, mut connection) => {
                 info!("Miner {uid} marked as cheater");
 
-                *neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Unusable;
+                *connection.guard = ConnectionState::Unusable;
                 metrics.connected_miners.add(-1, &[]);
 
                 unsafe {

@@ -19,7 +19,7 @@ const VALIDATION_CHANCE: f32 = 0.3;
 pub enum ProcessingCompletionState {
     Completed(u64, Duration),
     Failed(u64, Range<u64>, ConnectionGuard, Duration),
-    Cheated(Range<u64>),
+    Cheated(Range<u64>, ConnectionGuard),
 }
 
 pub struct ProcessingCompletionResult {
@@ -194,7 +194,7 @@ fn handle_connection(
                         completion_events
                             .send(ProcessingCompletionResult {
                                 uid,
-                                state: ProcessingCompletionState::Cheated(start..end),
+                                state: ProcessingCompletionState::Cheated(start..end, connection),
                             })
                             .unwrap();
 
