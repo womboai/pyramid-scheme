@@ -107,7 +107,7 @@ pub async fn handle_completion_events(
 
     for (uid, time) in uid_times {
         if range == 0 {
-            return (*uid, u8::MAX);
+            weights[uid as usize] = u8::MAX;
         }
 
         let contribution_time = u8::MAX as u128 * (time - minimum_time);
