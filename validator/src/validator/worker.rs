@@ -189,7 +189,6 @@ fn handle_connection(
 
                     if !verify_result(&current_row[range.start..range.start + len], last, &buffer[..len])
                     {
-                        info!("Miner {uid} marked as cheater");
                         metrics.cheater_count.add(1, &[]);
 
                         completion_events

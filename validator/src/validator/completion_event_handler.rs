@@ -39,7 +39,7 @@ pub async fn handle_completion_events(
                 time_per_uid_byte.push((uid, duration, processed));
             }
             ProcessingCompletionState::Failed(processed, remaining, mut connection, duration) => {
-                debug!("Miner {uid} failed at assigned work");
+                info!("Miner {uid} failed at assigned work, disconnecting");
 
                 *connection.guard = ConnectionState::Disconnected;
                 metrics.connected_miners.add(-1, &[]);
@@ -61,7 +61,7 @@ pub async fn handle_completion_events(
                     .expect("Work queue channel should not be closed");
             }
             ProcessingCompletionState::Cheated(range) => {
-                debug!("Miner {uid} marked as cheater");
+                info!("Miner {uid} marked as cheater");
 
                 *neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Unusable;
                 metrics.connected_miners.add(-1, &[]);
