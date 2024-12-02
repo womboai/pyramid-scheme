@@ -688,11 +688,12 @@ impl Validator {
             &self.completion_receiver,
             &self.work_queue_sender,
             byte_count,
+            self.neurons.len(),
             &self.metrics,
         )
         .await;
 
-        for (uid, weight) in weights {
+        for (uid, weight) in weights.iter().enumerate() {
             let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
 
             self.neurons[uid as usize].weight = weight;
