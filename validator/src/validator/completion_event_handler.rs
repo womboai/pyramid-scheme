@@ -4,7 +4,7 @@ use crate::validator::worker::{ProcessingCompletionResult, ProcessingCompletionS
 use std::ops::Range;
 use std::sync::mpmc::{Receiver, Sender};
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, info};
 
 pub async fn handle_completion_events(
     neurons: &[NeuronData],
