@@ -1,25 +1,42 @@
 use crate::validator::connection::find_suitable_connection;
-use crate::validator::memory_storage::MemoryMappedStorage;
-use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionGuard, NeuronData};
 use crate::validator::CurrentRow;
+use neuron::ProcessingNetworkRequest;
 use std::cmp::min;
 use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::ops::Range;
 use std::random::random;
 use std::sync::mpmc::{Receiver, Sender};
-use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{slice, thread};
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-const VALIDATION_CHANCE: f32 = 0.3;
+const VALIDATION_CHANCE: f32 = 0.05;
+
+#[derive(Debug)]
+pub struct ProcessingRequest {
+    pub range: Range<u64>,
+    pub last_byte: u8,
+}
+
+impl ProcessingRequest {
+    pub fn new(range: Range<u64>, row: &mut CurrentRow) -> Self {
+        let last_byte = if range.start == 0 {
+            0
+        } else {
+            row.get_mut()[range.start as usize - 1]
+        };
+
+        Self { range, last_byte }
+    }
+}
 
 pub enum ProcessingCompletionState {
     Completed(u64, Duration),
-    Failed(u64, Range<u64>, ConnectionGuard, Duration),
-    Cheated(Range<u64>, ConnectionGuard),
+    Failed(u64, ProcessingRequest, ConnectionGuard, Duration),
+    Cheated(ProcessingRequest, ConnectionGuard),
 }
 
 pub struct ProcessingCompletionResult {
@@ -41,68 +58,115 @@ fn verify_result(original: &[u8], mut last: u8, result: &[u8]) -> bool {
     true
 }
 
-fn handle_connection(
-    current_row: &mut MemoryMappedStorage,
-    mut connection: ConnectionGuard,
-    start: u64,
-    end: u64,
+fn read_len(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    output: &mut [u8],
+    length: usize,
+    mut last: u8,
     uid: u16,
-    completion_events: Sender<ProcessingCompletionResult>,
-    metrics: &ValidatorMetrics,
-) {
-    let buffer_size = min(end - start, 8 * 4 * 256);
+) -> Option<usize> {
+    let mut read = 0;
+
+    while read < length {
+        let len = match stream.read(&mut buffer[..length - read]) {
+            Ok(len) => {
+                if len == 0 {
+                    warn!("Failed to read from miner {uid} connection");
+
+                    return Some(read);
+                }
+
+                len
+            }
+            Err(error) => {
+                warn!("Error occurred reading from miner {uid}: {error}");
+
+                return Some(read);
+            }
+        };
+
+        if random::<u16>() as f32 / (u16::MAX as f32) < VALIDATION_CHANCE {
+            info!("Verifying results of {uid}");
+
+            if !verify_result(&output[read..read + len], last, &buffer[..len]) {
+                return None;
+            }
+        }
+
+        let last_byte = output[read + len - 1];
+
+        (&mut output[read..read + len]).copy_from_slice(&buffer[..len]);
+
+        last = last_byte;
+
+        read += len;
+    }
+
+    Some(read)
+}
+
+fn handle_connection(
+    current_row: &CurrentRow,
+    mut connection: ConnectionGuard,
+    request: ProcessingRequest,
+    uid: u16,
+) -> ProcessingCompletionState {
+    let start = request.range.start;
+    let end = request.range.end;
+    let buffer_size = 8 * 4 * 256;
     let mut buffer = Vec::with_capacity(buffer_size as usize);
 
     unsafe { buffer.set_len(buffer_size as usize) }
 
     let iterations = (end - start).div_ceil(buffer_size);
 
-    let chance = if iterations > 1 {
-        VALIDATION_CHANCE * iterations as f32 - VALIDATION_CHANCE.powi(iterations as i32)
-    } else {
-        VALIDATION_CHANCE
+    let mut last = request.last_byte;
+
+    let network_request = ProcessingNetworkRequest {
+        length: end - start,
+        last_byte: last,
     };
 
-    let validation_start_index = if random::<u16>() as f32 / u16::MAX as f32 <= chance {
-        let t = random::<u16>() as f32 / u16::MAX as f32;
-        let validation_start_index = ((end - start) as f32 * t) as u64;
+    let network_request = unsafe {
+        slice::from_raw_parts(
+            &network_request as *const _ as *const u8,
+            size_of_val(&network_request),
+        )
+    };
 
-        Some(validation_start_index)
-    } else {
-        None
+    if let Err(e) = connection.write(network_request) {
+        warn!("Failed to request data processing from miner {uid}, {e}");
+
+        return ProcessingCompletionState::Failed(0, request, connection, Duration::new(0, 0));
     };
 
     let mut total_processed = 0;
-    let mut last = 0;
 
     let time_started = Instant::now();
 
     for i in 0..iterations {
         let mut processed = 0;
         let from = (start + i * buffer_size) as usize;
-        let to = (start + (i + 1) * buffer_size) as usize;
+        let to = min(start + (i + 1) * buffer_size, end) as usize;
 
-        while processed as usize != to - from {
-            let written = match connection.write(&current_row[from + processed as usize..to]) {
+        while processed != to - from {
+            let written = match connection.write(&current_row.get()[from + processed..to]) {
                 Ok(len) => {
                     if len == 0 {
                         warn!(
                             "Failed to write to miner {uid} connection while there's more to process",
                         );
 
-                        completion_events
-                            .send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Failed(
-                                    total_processed,
-                                    start + total_processed..end,
-                                    connection,
-                                    time_started.elapsed(),
-                                ),
-                            })
-                            .unwrap();
-
-                        return;
+                        return ProcessingCompletionState::Failed(
+                            total_processed,
+                            ProcessingRequest {
+                                range: start + total_processed..end,
+                                last_byte: last,
+                            },
+                            connection,
+                            time_started.elapsed(),
+                        );
                     }
 
                     len
@@ -110,144 +174,80 @@ fn handle_connection(
                 Err(error) => {
                     warn!("Error occurred writing to miner {uid}: {error}");
 
-                    completion_events
-                        .send(ProcessingCompletionResult {
-                            uid,
-                            state: ProcessingCompletionState::Failed(
-                                total_processed,
-                                start + total_processed..end,
-                                connection,
-                                time_started.elapsed(),
-                            ),
-                        })
-                        .unwrap();
-
-                    return;
+                    return ProcessingCompletionState::Failed(
+                        total_processed,
+                        ProcessingRequest {
+                            range: start + total_processed..end,
+                            last_byte: last,
+                        },
+                        connection,
+                        time_started.elapsed(),
+                    );
                 }
             };
 
-            let mut read = 0;
+            let last_byte = current_row.get()[from + processed + written - 1];
 
-            while read < written {
-                let range = from + read + processed as usize..from + written + processed as usize;
+            let read = unsafe {
+                read_len(
+                    &mut connection,
+                    &mut buffer,
+                    &mut current_row.get_mut_unchecked()
+                        [from + processed..from + processed + written],
+                    written,
+                    last,
+                    uid,
+                )
+            };
 
-                let should_validate = if let Some(validation_start_index) = validation_start_index {
-                    if range.contains(&(validation_start_index as usize)) {
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+            let Some(read) = read else {
+                return ProcessingCompletionState::Cheated(request, connection);
+            };
 
-                let len = match connection.read(&mut buffer[0..range.len()]) {
-                    Ok(len) => {
-                        if len == 0 {
-                            warn!("Failed to read from miner {uid} connection");
+            last = last_byte;
 
-                            completion_events
-                                .send(ProcessingCompletionResult {
-                                    uid,
-                                    state: ProcessingCompletionState::Failed(
-                                        total_processed,
-                                        start + total_processed..end,
-                                        connection,
-                                        time_started.elapsed(),
-                                    ),
-                                })
-                                .unwrap();
+            processed += read;
+            total_processed += read as u64;
 
-                            return;
-                        }
-
-                        len
-                    }
-                    Err(error) => {
-                        warn!("Error occurred reading from miner {uid}: {error}");
-
-                        completion_events
-                            .send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Failed(
-                                    total_processed,
-                                    start + total_processed..end,
-                                    connection,
-                                    time_started.elapsed(),
-                                ),
-                            })
-                            .unwrap();
-
-                        return;
-                    }
-                };
-
-                let read_chunk_range = range.start..range.start + len;
-
-                if should_validate {
-                    info!("Verifying results of miner {uid}");
-
-                    if !verify_result(&current_row[range.start..range.start + len], last, &buffer[..len])
-                    {
-                        metrics.cheater_count.add(1, &[]);
-
-                        completion_events
-                            .send(ProcessingCompletionResult {
-                                uid,
-                                state: ProcessingCompletionState::Cheated(start..end, connection),
-                            })
-                            .unwrap();
-
-                        return;
-                    }
-                }
-
-                last = current_row[read_chunk_range.end - 1];
-                (&mut current_row[read_chunk_range]).copy_from_slice(&buffer[..len]);
-                read += len;
+            if read < written {
+                return ProcessingCompletionState::Failed(
+                    total_processed,
+                    ProcessingRequest {
+                        range: start + total_processed..end,
+                        last_byte: last,
+                    },
+                    connection,
+                    time_started.elapsed(),
+                );
             }
-
-            processed += written as u64;
         }
-
-        total_processed += processed;
     }
 
-    completion_events
-        .send(ProcessingCompletionResult {
-            uid,
-            state: ProcessingCompletionState::Completed(total_processed, time_started.elapsed()),
-        })
-        .unwrap();
+    ProcessingCompletionState::Completed(total_processed, time_started.elapsed())
 }
 
 pub fn do_work(
     current_row: &CurrentRow,
     neurons: &Vec<NeuronData>,
-    work_queue_receiver: Receiver<Range<u64>>,
+    work_queue_receiver: Receiver<ProcessingRequest>,
     completion_sender: Sender<ProcessingCompletionResult>,
-    metrics: Arc<ValidatorMetrics>,
 ) {
     loop {
-        let Ok(range) = work_queue_receiver.try_recv() else {
+        let Ok(request) = work_queue_receiver.try_recv() else {
             thread::sleep(Duration::from_millis(1));
             continue;
         };
 
-        debug!("Finding suitable miner for {range:?}");
+        debug!("Finding suitable miner for {request:?}");
 
         let (uid, connection) = find_suitable_connection(neurons);
 
-        debug!("Assigned {range:?} to miner {uid}");
+        debug!("Assigned {request:?} to miner {uid}");
 
-        handle_connection(
-            unsafe { current_row.get() },
-            connection,
-            range.start,
-            range.end,
-            uid,
-            completion_sender.clone(),
-            &metrics,
-        );
+        let state = handle_connection(current_row, connection, request, uid);
+
+        completion_sender
+            .send(ProcessingCompletionResult { state, uid })
+            .expect("Completion event channel should not be closed");
     }
 }

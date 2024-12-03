@@ -1,7 +1,8 @@
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
-use crate::validator::worker::{ProcessingCompletionResult, ProcessingCompletionState};
-use std::ops::Range;
+use crate::validator::worker::{
+    ProcessingCompletionResult, ProcessingCompletionState, ProcessingRequest,
+};
 use std::sync::mpmc::{Receiver, Sender};
 use std::time::Duration;
 use tracing::{debug, info};
@@ -9,7 +10,7 @@ use tracing::{debug, info};
 pub async fn handle_completion_events(
     neurons: &[NeuronData],
     completion_receiver: &Receiver<ProcessingCompletionResult>,
-    work_queue_sender: &Sender<Range<u64>>,
+    work_queue_sender: &Sender<ProcessingRequest>,
     byte_count: u64,
     neuron_count: usize,
     metrics: &ValidatorMetrics,
@@ -50,7 +51,8 @@ pub async fn handle_completion_events(
                     *score += processed as u128;
                 }
 
-                if let Some((_, d, p)) = time_per_uid_byte.iter_mut().find(|(id, _, _)| *id == uid) {
+                if let Some((_, d, p)) = time_per_uid_byte.iter_mut().find(|(id, _, _)| *id == uid)
+                {
                     *d += duration;
                     *p += processed;
                 } else {
@@ -66,6 +68,7 @@ pub async fn handle_completion_events(
 
                 *connection.guard = ConnectionState::Unusable;
                 metrics.connected_miners.add(-1, &[]);
+                metrics.cheater_count.add(1, &[]);
 
                 unsafe {
                     *score = Score::Cheater;
@@ -85,7 +88,7 @@ pub async fn handle_completion_events(
 
     for (uid, duration, processed) in time_per_uid_byte {
         if processed == 0 {
-            continue
+            continue;
         }
 
         let time_per_byte = duration.as_nanos() / processed as u128;
@@ -108,6 +111,7 @@ pub async fn handle_completion_events(
     for (uid, time) in uid_times {
         if range == 0 {
             weights[uid as usize] = u8::MAX;
+            continue;
         }
 
         let contribution_time = u8::MAX as u128 * (time - minimum_time);

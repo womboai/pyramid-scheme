@@ -1,6 +1,5 @@
 extern crate core;
 
-use std::convert::Into;
 use anyhow::{anyhow, Result};
 use dotenv::from_filename;
 use opentelemetry::{KeyValue, Value as LogValue};
@@ -10,6 +9,7 @@ use opentelemetry_sdk::logs::LoggerProvider;
 use opentelemetry_sdk::Resource;
 use rusttensor::subtensor::Subtensor;
 use rusttensor::AccountId;
+use std::convert::Into;
 use std::env;
 use std::iter::Iterator;
 use std::ops::Deref;
@@ -25,6 +25,12 @@ pub mod config;
 pub mod updater;
 
 const OPENTELEMETRY_EXPORT_ENDPOINT: &'static str = "http://18.215.170.244:4317";
+
+#[repr(C)]
+pub struct ProcessingNetworkRequest {
+    pub length: u64,
+    pub last_byte: u8,
+}
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
 #[repr(C)]
@@ -45,7 +51,9 @@ impl FromStr for Version {
         let patch = parts.next().unwrap_or(0);
 
         if parts.next().is_some() {
-            return Err(anyhow!("Crate version string {s} has too many parts, needs to be x.y.z"));
+            return Err(anyhow!(
+                "Crate version string {s} has too many parts, needs to be x.y.z"
+            ));
         }
 
         Ok(Version {
@@ -62,11 +70,12 @@ impl From<&Version> for u64 {
     }
 }
 
-pub const SPEC_VERSION: u32 = 1;
+pub const SPEC_VERSION: u32 = 2;
 
 pub const VERSION_STRING: &'static str = env!("CARGO_PKG_VERSION");
 
-pub static VERSION: LazyLock<Version> = LazyLock::new(|| Version::from_str(VERSION_STRING).unwrap());
+pub static VERSION: LazyLock<Version> =
+    LazyLock::new(|| Version::from_str(VERSION_STRING).unwrap());
 
 pub static INTEGRAL_VERSION: LazyLock<u64> = LazyLock::new(|| VERSION.deref().into());
 
@@ -93,37 +102,39 @@ pub fn load_env() {
     }
 }
 
-pub fn setup_opentelemetry(account_id: &AccountId, neuron_type: &'static str) {
+pub fn setup_logging(account_id: &AccountId, telmetry: bool, neuron_type: &'static str) {
     let filter_layer = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
 
-    let exporter_builder = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT);
-
-    let provider: LoggerProvider = LoggerProvider::builder()
-        .with_resource(Resource::new(vec![
-            KeyValue::new("service.name", "pyramid-scheme"),
-            KeyValue::new("neuron.type", neuron_type),
-            KeyValue::new("netuid", LogValue::I64(*config::NETUID as i64)),
-            KeyValue::new("neuron.hotkey", account_id.to_string()),
-        ]))
-        .with_batch_exporter(
-            exporter_builder.build_log_exporter().unwrap(),
-            opentelemetry_sdk::runtime::Tokio,
-        )
-        .build();
-
-    let otel = OpenTelemetryTracingBridge::new(&provider);
-
     let fmt = fmt::layer().with_line_number(true).with_thread_ids(true);
 
-    tracing_subscriber::registry()
-        .with(fmt)
-        .with(filter_layer)
-        .with(otel)
-        .init();
+    let registry = tracing_subscriber::registry().with(fmt).with(filter_layer);
 
-    info!("Starting {} v{}", neuron_type, env!("CARGO_PKG_VERSION"));
+    if telmetry {
+        let exporter_builder = opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_endpoint(OPENTELEMETRY_EXPORT_ENDPOINT);
+
+        let provider: LoggerProvider = LoggerProvider::builder()
+            .with_resource(Resource::new(vec![
+                KeyValue::new("service.name", "pyramid-scheme"),
+                KeyValue::new("neuron.type", neuron_type),
+                KeyValue::new("netuid", LogValue::I64(*config::NETUID as i64)),
+                KeyValue::new("neuron.hotkey", account_id.to_string()),
+            ]))
+            .with_batch_exporter(
+                exporter_builder.build_log_exporter().unwrap(),
+                opentelemetry_sdk::runtime::Tokio,
+            )
+            .build();
+
+        let otel = OpenTelemetryTracingBridge::new(&provider);
+
+        registry.with(otel).init();
+    } else {
+        registry.init();
+    }
+
+    info!("Starting {neuron_type} v{VERSION_STRING}");
 }
