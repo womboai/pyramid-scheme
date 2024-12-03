@@ -1,18 +1,20 @@
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
-use crate::validator::worker::{ProcessingCompletionResult, ProcessingCompletionState};
-use std::ops::Range;
+use crate::validator::worker::{
+    ProcessingCompletionResult, ProcessingCompletionState, ProcessingRequest,
+};
 use std::sync::mpmc::{Receiver, Sender};
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, info};
 
 pub async fn handle_completion_events(
     neurons: &[NeuronData],
     completion_receiver: &Receiver<ProcessingCompletionResult>,
-    work_queue_sender: &Sender<Range<u64>>,
+    work_queue_sender: &Sender<ProcessingRequest>,
     byte_count: u64,
+    neuron_count: usize,
     metrics: &ValidatorMetrics,
-) -> Vec<(u16, u8)> {
+) -> Vec<u8> {
     let mut time_per_uid_byte = Vec::new();
     let mut data_processed = 0;
 
@@ -39,7 +41,7 @@ pub async fn handle_completion_events(
                 time_per_uid_byte.push((uid, duration, processed));
             }
             ProcessingCompletionState::Failed(processed, remaining, mut connection, duration) => {
-                debug!("Miner {uid} failed at assigned work");
+                info!("Miner {uid} failed at assigned work, disconnecting");
 
                 *connection.guard = ConnectionState::Disconnected;
                 metrics.connected_miners.add(-1, &[]);
@@ -49,7 +51,8 @@ pub async fn handle_completion_events(
                     *score += processed as u128;
                 }
 
-                if let Some((_, d, p)) = time_per_uid_byte.iter_mut().find(|(id, _, _)| *id == uid) {
+                if let Some((_, d, p)) = time_per_uid_byte.iter_mut().find(|(id, _, _)| *id == uid)
+                {
                     *d += duration;
                     *p += processed;
                 } else {
@@ -60,11 +63,12 @@ pub async fn handle_completion_events(
                     .send(remaining)
                     .expect("Work queue channel should not be closed");
             }
-            ProcessingCompletionState::Cheated(range) => {
-                debug!("Miner {uid} marked as cheater");
+            ProcessingCompletionState::Cheated(range, mut connection) => {
+                info!("Miner {uid} marked as cheater");
 
-                *neurons[uid as usize].connection.lock().unwrap() = ConnectionState::Unusable;
+                *connection.guard = ConnectionState::Unusable;
                 metrics.connected_miners.add(-1, &[]);
+                metrics.cheater_count.add(1, &[]);
 
                 unsafe {
                     *score = Score::Cheater;
@@ -84,7 +88,7 @@ pub async fn handle_completion_events(
 
     for (uid, duration, processed) in time_per_uid_byte {
         if processed == 0 {
-            continue
+            continue;
         }
 
         let time_per_byte = duration.as_nanos() / processed as u128;
@@ -102,14 +106,19 @@ pub async fn handle_completion_events(
 
     let range = maximum_time - minimum_time;
 
-    uid_times.iter().map(|(uid, time)| {
+    let mut weights = vec![0u8; neuron_count];
+
+    for (uid, time) in uid_times {
         if range == 0 {
-            return (*uid, u8::MAX);
+            weights[uid as usize] = u8::MAX;
+            continue;
         }
 
-        let contribution_time = u8::MAX as u128 * (*time - minimum_time);
+        let contribution_time = u8::MAX as u128 * (time - minimum_time);
         let inverse_weight = contribution_time / range;
 
-        (*uid, u8::MAX - inverse_weight as u8)
-    }).collect::<Vec<_>>()
+        weights[uid as usize] = u8::MAX - inverse_weight as u8;
+    }
+
+    weights
 }

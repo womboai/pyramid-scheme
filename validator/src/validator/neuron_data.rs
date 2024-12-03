@@ -1,6 +1,6 @@
-use std::cell::UnsafeCell;
 use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
+use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::mem::transmute;
 use std::net::TcpStream;

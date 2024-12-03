@@ -6,7 +6,7 @@ use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
 use axum::Router;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_opentelemetry};
+use neuron::{config, load_env, setup_logging};
 use tracing::info;
 
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
@@ -47,7 +47,7 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    setup_opentelemetry(&signer.account_id(), "validator");
+    setup_logging(&signer.account_id(), false, "validator");
 
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 

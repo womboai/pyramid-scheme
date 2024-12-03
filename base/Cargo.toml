@@ -1,6 +1,6 @@
 [package]
 name = "pyramid-scheme-neuron"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -14,9 +14,6 @@ anyhow = { workspace = true }
 
 dirs = { workspace = true }
 
-serde = { workspace = true }
-serde_json = { workspace = true }
-
 thiserror = { workspace = true }
 
 rusttensor = { workspace = true }
@@ -27,6 +24,5 @@ dotenv = "0.15.0"
 
 opentelemetry = "0.26.0"
 opentelemetry-appender-tracing = "0.26.0"
-opentelemetry-stdout = "0.26.0"
 opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
 opentelemetry-otlp = "0.26.0"
