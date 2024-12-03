@@ -394,7 +394,7 @@ async fn main() {
         hotkey_location
     ));
 
-    setup_logging(&account_id, true, "miner");
+    setup_logging(&account_id, false, "miner");
 
     let mut miner = Miner::new(account_id).await;
 

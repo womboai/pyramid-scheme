@@ -47,7 +47,7 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    setup_logging(&signer.account_id(), false, "validator");
+    setup_logging(&signer.account_id(), true, "validator");
 
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
