@@ -94,11 +94,9 @@ fn read_len(
             }
         }
 
-        let last_byte = output[read + len - 1];
+        last = output[read + len - 1];
 
         (&mut output[read..read + len]).copy_from_slice(&buffer[..len]);
-
-        last = last_byte;
 
         read += len;
     }
@@ -151,7 +149,9 @@ fn handle_connection(
         let to = min(start + (i + 1) * buffer_size, end) as usize;
 
         while processed != to - from {
-            let written = match connection.write(&current_row.get()[from + processed..to]) {
+            let write_from = from + processed;
+
+            let written = match connection.write(&current_row.get()[write_from..to]) {
                 Ok(len) => {
                     if len == 0 {
                         warn!(
@@ -186,14 +186,13 @@ fn handle_connection(
                 }
             };
 
-            let last_byte = current_row.get()[from + processed + written - 1];
+            let last_byte = current_row.get()[write_from + written - 1];
 
             let read = unsafe {
                 read_len(
                     &mut connection,
                     &mut buffer,
-                    &mut current_row.get_mut_unchecked()
-                        [from + processed..from + processed + written],
+                    &mut current_row.get_mut_unchecked()[write_from..write_from + written],
                     written,
                     last,
                     uid,

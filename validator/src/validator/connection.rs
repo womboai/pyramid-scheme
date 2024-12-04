@@ -140,15 +140,14 @@ pub fn worker_weights(neurons: &mut [NeuronData]) -> Vec<u8> {
 }
 
 pub fn find_suitable_connection(neurons: &[NeuronData]) -> (u16, ConnectionGuard) {
-    let mut references = neurons.iter().collect::<Vec<_>>();
+    let mut references = neurons.iter().enumerate().collect::<Vec<_>>();
 
-    references.sort_by_key(|neuron| u8::MAX - neuron.weight.get());
+    references.sort_by_key(|(_, &ref neuron)| u8::MAX - neuron.weight.get());
 
     let free_connection = references
         .iter()
         .copied()
-        .enumerate()
-        .find_map(|(uid, &ref neuron)| {
+        .find_map(|(uid, neuron)| {
             if let Some(mut guard) = neuron.connection.try_lock().ok() {
                 if let ConnectionState::Connected(_) = &mut *guard {
                     Some((uid as u16, ConnectionGuard::new(guard)))
@@ -166,7 +165,7 @@ pub fn find_suitable_connection(neurons: &[NeuronData]) -> (u16, ConnectionGuard
 
     info!("No suitable miners found, waiting for connections");
 
-    for (uid, neuron) in references.iter().copied().enumerate() {
+    for (uid, neuron) in references.iter().copied() {
         let guard = neuron.connection.lock().unwrap();
 
         if let ConnectionState::Connected(_) = &*guard {

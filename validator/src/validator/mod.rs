@@ -631,7 +631,7 @@ impl Validator {
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        info!("Splitting work into {} chunks", worker_weights.len());
+        info!("Splitting work into {} [+1] chunks", worker_weights.len());
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
 
@@ -663,14 +663,16 @@ impl Validator {
                 .send(ProcessingRequest::new(range, &mut self.current_row))
                 .expect("Work queue channel should not be closed");
 
+            position = end;
+
             if end == byte_count {
                 break;
             }
-
-            position = end;
         }
 
         if position != byte_count {
+            debug!("Adding {range:?} to work queue", range = position..byte_count);
+
             self.work_queue_sender
                 .send(ProcessingRequest::new(
                     position..byte_count,
