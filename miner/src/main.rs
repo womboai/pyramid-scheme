@@ -380,11 +380,7 @@ impl Miner {
 async fn main() {
     load_env();
     
-    let auto_updates = std::env::var("AUTO_UPDATE")
-        .map(|v| v.parse::<bool>().unwrap_or(false))
-        .unwrap_or(true);
-    
-    if auto_updates {
+    if *config::AUTO_UPDATE {
         let updater = Updater::new(Duration::from_secs(3600));
         updater.spawn();
     }
