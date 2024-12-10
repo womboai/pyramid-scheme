@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use std::{io, slice};
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
-use clap::Parser;
 
 mod signature_checking;
 
@@ -377,20 +376,15 @@ impl Miner {
     }
 }
 
-#[derive(Parser)]
-#[command(version, about)]
-struct Args {
-    #[arg(long, default_value_t = false)]
-    disable_updates: bool,
-}
-
 #[tokio::main]
 async fn main() {
     load_env();
-
-    let args = Args::parse();
     
-    if !args.disable_updates {
+    let auto_updates = std::env::var("AUTO_UPDATE")
+        .map(|v| v.parse::<bool>().unwrap_or(false))
+        .unwrap_or(true);
+    
+    if auto_updates {
         let updater = Updater::new(Duration::from_secs(3600));
         updater.spawn();
     }
