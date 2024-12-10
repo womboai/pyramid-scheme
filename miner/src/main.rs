@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use std::{io, slice};
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
+use clap::Parser;
 
 mod signature_checking;
 
@@ -376,12 +377,23 @@ impl Miner {
     }
 }
 
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    #[arg(long, default_value_t = false)]
+    disable_updates: bool,
+}
+
 #[tokio::main]
 async fn main() {
     load_env();
 
-    let updater = Updater::new(Duration::from_secs(3600));
-    updater.spawn();
+    let args = Args::parse();
+    
+    if !args.disable_updates {
+        let updater = Updater::new(Duration::from_secs(3600));
+        updater.spawn();
+    }
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),
