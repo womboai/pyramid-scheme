@@ -35,6 +35,11 @@ async fn api_main() {
 async fn main() {
     load_env();
 
+    if *config::AUTO_UPDATE {
+        let updater = Updater::new(Duration::from_secs(3600));
+        updater.spawn();
+    }
+
     let metrics = validator::metrics::setup_metrics();
 
     let hotkey_location = hotkey_location(
@@ -52,9 +57,6 @@ async fn main() {
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
     tokio::task::spawn(api_main());
-
-    let updater = Updater::new(Duration::from_secs(3600));
-    let _update_thread = updater.spawn();
 
     validator.run().await;
 

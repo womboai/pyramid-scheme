@@ -379,9 +379,11 @@ impl Miner {
 #[tokio::main]
 async fn main() {
     load_env();
-
-    let updater = Updater::new(Duration::from_secs(3600));
-    updater.spawn();
+    
+    if *config::AUTO_UPDATE {
+        let updater = Updater::new(Duration::from_secs(3600));
+        updater.spawn();
+    }
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),
