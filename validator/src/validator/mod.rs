@@ -736,7 +736,10 @@ impl Validator {
                 let block = match self.subtensor.blocks().at_latest().await {
                     Ok(block) => block,
                     Err(e) => {
-                        error!("Failed to fetch block, {e}. Retrying");
+                        error!("Failed to fetch block, {e}");
+                        info!("Restarting subtensor client");
+
+                        self.subtensor = subtensor().await.unwrap();
 
                         tokio::time::sleep(Duration::from_secs(12)).await;
 

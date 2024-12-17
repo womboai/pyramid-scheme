@@ -285,6 +285,13 @@ impl Miner {
             if now - self.last_block_fetch >= Duration::from_secs(12) {
                 if let Err(e) = self.sync(now).await {
                     error!("Failed to sync metagraph: {e}");
+
+                    info!("Restarting subtensor client");
+                    self.subtensor = subtensor().await.unwrap();
+
+                    tokio::time::sleep(Duration::from_secs(12)).await;
+
+                    continue;
                 }
             }
 
