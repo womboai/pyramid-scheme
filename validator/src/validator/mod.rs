@@ -7,8 +7,7 @@ use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
 
 use crate::validator::completion_event_handler::handle_completion_events;
 use crate::validator::connection::{connect_to_miner, worker_count_hint, worker_weights};
-use crate::validator::evolution_step::normalize_pair;
-use crate::validator::worker::{do_work, ProcessingCompletionResult};
+use crate::validator::worker::{do_work, ProcessingCompletionResult, ProcessingRequest};
 use anyhow::Result;
 use rusttensor::api::apis;
 use rusttensor::rpc::call_runtime_api_decoded;
@@ -21,27 +20,25 @@ use std::cell::UnsafeCell;
 use std::cmp::min;
 use std::io::ErrorKind;
 use std::mem::transmute;
-use std::ops::Range;
+use std::num::NonZeroU8;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
-use std::num::NonZeroU8;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
 mod completion_event_handler;
 mod connection;
-mod evolution_step;
 mod memory_storage;
 pub mod metrics;
 mod neuron_data;
 mod worker;
 
 const GROW_BY: u64 = 1024 * 1024 * 8;
-const DATA_SPEC_VERSION: u32 = 2;
+const DATA_SPEC_VERSION: u32 = 4;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -54,8 +51,12 @@ impl CurrentRow {
         self.0.get_mut()
     }
 
-    unsafe fn get(&self) -> &mut MemoryMappedStorage {
+    unsafe fn get_mut_unchecked(&self) -> &mut [u8] {
         &mut *self.0.get()
+    }
+
+    fn get(&self) -> &[u8] {
+        unsafe { &*self.0.get() }
     }
 }
 
@@ -146,8 +147,8 @@ pub struct Validator {
     last_block_fetch: Instant,
     attempted_set_weights: bool,
 
-    work_queue_sender: Sender<Range<u64>>,
-    work_queue_receiver: Receiver<Range<u64>>,
+    work_queue_sender: Sender<ProcessingRequest>,
+    work_queue_receiver: Receiver<ProcessingRequest>,
     completion_sender: Sender<ProcessingCompletionResult>,
     completion_receiver: Receiver<ProcessingCompletionResult>,
 
@@ -295,7 +296,10 @@ impl Validator {
                 })
                 .collect::<Vec<_>>();
 
-            handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
         });
 
         let mut neurons = Box::pin(neurons);
@@ -317,16 +321,9 @@ impl Validator {
 
                 let work_queue_receiver = work_queue_receiver.clone();
                 let completion_sender = completion_sender.clone();
-                let metrics = metrics.clone();
 
                 thread::spawn(move || {
-                    do_work(
-                        current_row,
-                        neurons,
-                        work_queue_receiver,
-                        completion_sender,
-                        metrics,
-                    )
+                    do_work(current_row, neurons, work_queue_receiver, completion_sender)
                 })
             })
             .collect();
@@ -438,8 +435,7 @@ impl Validator {
             })
             .collect();
 
-        let payload =
-            set_weights_payload(*config::NETUID, scores, *INTEGRAL_VERSION);
+        let payload = set_weights_payload(*config::NETUID, scores, *INTEGRAL_VERSION);
 
         subtensor
             .tx()
@@ -471,6 +467,7 @@ impl Validator {
                 .subtensor
                 .runtime_api()
                 .at(self.current_block.reference());
+
             let neurons = call_runtime_api_decoded(
                 &runtime_api,
                 apis()
@@ -519,10 +516,7 @@ impl Validator {
                             &self.signer,
                             self.uid,
                             &neurons[i],
-                            matches!(
-                                *neuron.score.get_mut(),
-                                Score::Cheater
-                            ),
+                            matches!(*neuron.score.get_mut(), Score::Cheater),
                             &self.metrics,
                         )
                         .into()
@@ -573,16 +567,9 @@ impl Validator {
 
                     let work_queue_receiver = self.work_queue_receiver.clone();
                     let completion_sender = self.completion_sender.clone();
-                    let metrics = self.metrics.clone();
 
                     self.worker_threads.push(thread::spawn(move || {
-                        do_work(
-                            current_row,
-                            neurons,
-                            work_queue_receiver,
-                            completion_sender,
-                            metrics,
-                        )
+                        do_work(current_row, neurons, work_queue_receiver, completion_sender)
                     }))
                 }
             }
@@ -644,11 +631,9 @@ impl Validator {
         self.center_column
             .ensure_capacity(Self::center_column_file_size(self.step))?;
 
-        info!("Splitting work into {} chunks", worker_weights.len());
+        info!("Splitting work into {} [+1] chunks", worker_weights.len());
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
-
-        let chunk_size = byte_count.div_ceil(worker_weights.len() as u64);
 
         let weight_sum: u32 = worker_weights.iter().copied().map(|x| x as u32).sum();
 
@@ -661,25 +646,38 @@ impl Validator {
                 continue;
             }
 
+            let cache_line_size_remainder = chunk_size % 64;
+
+            let chunk_size = if cache_line_size_remainder == 0 {
+                chunk_size
+            } else {
+                chunk_size - cache_line_size_remainder + 64
+            };
+
             let end = min(position + chunk_size, byte_count);
             let range = position..end;
 
             debug!("Adding {range:?} to work queue");
 
             self.work_queue_sender
-                .send(range)
+                .send(ProcessingRequest::new(range, &mut self.current_row))
                 .expect("Work queue channel should not be closed");
+
+            position = end;
 
             if end == byte_count {
                 break;
             }
-
-            position = end;
         }
 
         if position != byte_count {
+            debug!("Adding {range:?} to work queue", range = position..byte_count);
+
             self.work_queue_sender
-                .send(position..byte_count)
+                .send(ProcessingRequest::new(
+                    position..byte_count,
+                    &mut self.current_row,
+                ))
                 .expect("Work queue channel should not be closed");
         }
 
@@ -688,30 +686,15 @@ impl Validator {
             &self.completion_receiver,
             &self.work_queue_sender,
             byte_count,
+            self.neurons.len(),
             &self.metrics,
         )
         .await;
 
-        for (uid, weight) in weights {
+        for (uid, weight) in weights.into_iter().enumerate() {
             let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
 
-            self.neurons[uid as usize].weight = weight;
-        }
-
-        for i in 0..worker_weights.len() as u64 - 1 {
-            let end = ((i + 1) * chunk_size) as usize;
-
-            if end >= byte_count as usize {
-                break;
-            }
-
-            let [a, b] = self.current_row.get_mut()[end..end + 1] else {
-                break;
-            };
-
-            let (a, b) = normalize_pair(a, b);
-
-            self.current_row.get_mut()[end..end + 1].copy_from_slice(&[a, b]);
+            self.neurons[uid].weight = weight;
         }
 
         let bit_index = self.step % 8;

@@ -1,17 +1,10 @@
 #![feature(portable_simd)]
 
-use std::io::{Read, Write};
-use std::mem::MaybeUninit;
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
-use std::time::{Duration, Instant};
-use std::{io, slice};
-
 use crate::signature_checking::info_matches;
 use anyhow::Result;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_opentelemetry, subtensor, SPEC_VERSION};
+use neuron::{config, load_env, setup_logging, subtensor, ProcessingNetworkRequest, SPEC_VERSION};
 use rusttensor::api::apis;
 use rusttensor::rpc::call_runtime_api_decoded;
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -19,6 +12,13 @@ use rusttensor::sign::{verify_signature, KeypairSignature};
 use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::{hotkey_location, load_key_account_id};
 use rusttensor::{AccountId, Block, BlockNumber};
+use std::cmp::min;
+use std::io::{Read, Write};
+use std::mem::MaybeUninit;
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
+use std::time::{Duration, Instant};
+use std::{io, slice};
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
 
@@ -45,8 +45,10 @@ struct Solver {
 }
 
 impl Solver {
-    fn new() -> Self {
-        Solver::default()
+    fn new(last_byte: u8) -> Self {
+        Solver {
+            last: u64::from_le_bytes([0, 0, 0, 0, 0, 0, 0, last_byte]),
+        }
     }
 
     /// Solve a chunk of memory aligned to `Simd<u64, N>` in `size_of::<Simd<u64, N>>` chunks
@@ -143,30 +145,49 @@ fn read<T>(stream: &mut TcpStream) -> io::Result<T> {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
-    let mut buffer = Vec::with_capacity(512);
-    let mut solver = Solver::new();
+fn handle_step_request(
+    stream: &mut TcpStream,
+    buffer: &mut [AlignedChunk],
+    total_solved: &mut u128,
+    validator_uid: u16,
+) -> bool {
+    let request = match read::<ProcessingNetworkRequest>(stream) {
+        Ok(request) => request,
+        Err(e) => {
+            error!("Failed to read request from validator {validator_uid}, {e}");
+            return false;
+        }
+    };
 
-    unsafe {
-        buffer.set_len(buffer.capacity());
-    }
+    info!(
+        "Solving {size} byte chunk for validator {validator_uid}",
+        size = request.length,
+    );
 
-    let mut total_solved = 0;
+    let mut solved = 0;
+    let mut solver = Solver::new(request.last_byte);
 
-    loop {
-        let len = match stream.read(as_u8_mut(&mut buffer)) {
+    while solved != request.length {
+        let read_len = min(
+            (request.length - solved) as usize,
+            buffer.len() * size_of::<AlignedChunk>(),
+        );
+
+        let len = match stream.read(&mut as_u8_mut(buffer)[..read_len]) {
             Ok(len) => len,
             Err(error) => {
                 error!("Failed to read from validator {validator_uid}, {error}");
-                return;
+                return false;
             }
         };
 
         if len == 0 {
-            break;
+            error!("Validator {validator_uid} unexpectedly stopped sending data");
+
+            return false;
         }
 
-        solver.solve(&mut buffer, len);
+        solver.solve(buffer, len);
 
         let mut written = 0;
 
@@ -175,7 +196,7 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
                 Ok(len) => {
                     if len == 0 {
                         error!(
-                            "Validator {validator_uid}'s connection does not appear to be writable"
+                            "Validator {validator_uid}'s connection does not appear to be writable",
                         );
                     } else {
                         written += len;
@@ -183,14 +204,33 @@ fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
                 }
                 Err(error) => {
                     error!("Failed to write to validator {validator_uid}, {error}");
-                    return;
+                    return false;
                 }
             }
         }
 
         debug!("Solved {written} bytes for validator {validator_uid}");
 
-        total_solved += written;
+        solved += written as u64;
+        *total_solved += written as u128;
+    }
+
+    true
+}
+
+fn handle_connection(mut stream: TcpStream, validator_uid: u16) {
+    let mut buffer = Vec::with_capacity(512);
+
+    unsafe {
+        buffer.set_len(buffer.capacity());
+    }
+
+    let mut total_solved = 0;
+
+    loop {
+        if !handle_step_request(&mut stream, &mut buffer, &mut total_solved, validator_uid) {
+            break;
+        }
     }
 
     info!("Disconnected from validator {validator_uid}, solved {total_solved} total bytes");
@@ -298,6 +338,8 @@ impl Miner {
             if let Ok((mut stream, address)) = listener.accept() {
                 info!("Validator {address} has connected");
 
+                stream.set_nonblocking(false).unwrap();
+
                 let message = match read::<VerificationMessage>(&mut stream) {
                     Ok(message) => message,
                     Err(error) => {
@@ -329,7 +371,10 @@ impl Miner {
                 }
 
                 if let Err(e) = stream.write(&SPEC_VERSION.to_le_bytes()) {
-                    warn!("Failed to send version to validator {}, {}", message.validator.uid, e);
+                    warn!(
+                        "Failed to send version to validator {}, {}",
+                        message.validator.uid, e
+                    );
                 }
 
                 pool.execute(move || handle_connection(stream, message.validator.uid));
@@ -341,9 +386,11 @@ impl Miner {
 #[tokio::main]
 async fn main() {
     load_env();
-
-    let updater = Updater::new(Duration::from_secs(3600));
-    updater.spawn();
+    
+    if *config::AUTO_UPDATE {
+        let updater = Updater::new(Duration::from_secs(3600));
+        updater.spawn();
+    }
 
     let hotkey_location = hotkey_location(
         config::WALLET_PATH.clone(),
@@ -351,9 +398,12 @@ async fn main() {
         &*config::HOTKEY_NAME,
     );
 
-    let account_id = load_key_account_id(&hotkey_location).expect(&format!("Error loading hotkey! Please verify that it exists! Looking in: '{:?}'", hotkey_location));
+    let account_id = load_key_account_id(&hotkey_location).expect(&format!(
+        "Error loading hotkey! Please verify that it exists! Looking in: '{:?}'",
+        hotkey_location
+    ));
 
-    setup_opentelemetry(&account_id, "miner");
+    setup_logging(&account_id, false, "miner");
 
     let mut miner = Miner::new(account_id).await;
 
@@ -370,7 +420,7 @@ mod test {
 
     #[test]
     fn ensure_accurate_solver() {
-        let mut solver = Solver::new();
+        let mut solver = Solver::default();
         let bits = (STEPS * 2 + 1) as usize;
         let mut expected = BigInt::new(Sign::Plus, vec![1]);
         let vec_size = bits.div_ceil(8).div_ceil(size_of::<AlignedChunk>());

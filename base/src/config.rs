@@ -16,6 +16,19 @@ pub static CHAIN_ENDPOINT: LazyLock<String> = LazyLock::new(|| {
     env::var("CHAIN_ENDPOINT").unwrap_or("wss://entrypoint-finney.opentensor.ai:443".to_owned())
 });
 
+
+pub static AUTO_UPDATE: LazyLock<bool> = LazyLock::new(|| {
+    env::var("AUTO_UPDATE")
+        .map(|value| {
+            value
+                .chars()
+                .next()
+                .map(|c| c == 't' || c == 'T' || c == '1')
+                .unwrap_or(false)
+        })
+        .unwrap_or(true)
+});
+
 pub static INSECURE_CHAIN_SCHEME: LazyLock<bool> = LazyLock::new(|| {
     env::var("INSECURE_CHAIN_SCHEME")
         .map(|value| {

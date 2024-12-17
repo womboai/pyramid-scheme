@@ -6,7 +6,7 @@ use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
 use axum::Router;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_opentelemetry};
+use neuron::{config, load_env, setup_logging};
 use tracing::info;
 
 use rusttensor::wallet::{hotkey_location, load_key_seed, signer_from_seed};
@@ -35,6 +35,11 @@ async fn api_main() {
 async fn main() {
     load_env();
 
+    if *config::AUTO_UPDATE {
+        let updater = Updater::new(Duration::from_secs(3600));
+        updater.spawn();
+    }
+
     let metrics = validator::metrics::setup_metrics();
 
     let hotkey_location = hotkey_location(
@@ -47,14 +52,11 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    setup_opentelemetry(&signer.account_id(), "validator");
+    setup_logging(&signer.account_id(), true, "validator");
 
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 
     tokio::task::spawn(api_main());
-
-    let updater = Updater::new(Duration::from_secs(3600));
-    let _update_thread = updater.spawn();
 
     validator.run().await;
 

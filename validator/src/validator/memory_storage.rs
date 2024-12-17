@@ -57,6 +57,10 @@ impl MemoryMapped for MemoryMappedFile {
     }
 
     fn ensure_capacity(&mut self, capacity: u64) -> Result<()> {
+        if self.mmap.len() >= capacity as usize {
+            return Ok(());
+        }
+
         self.file.set_len(capacity)?;
 
         self.mmap = unsafe { MmapOptions::new().map_mut(&self.file) }?;
