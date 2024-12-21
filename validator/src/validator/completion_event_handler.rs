@@ -37,7 +37,9 @@ pub async fn handle_completion_events(
 
                 time_per_uid_byte.push((uid, duration, processed));
 
-                available_worker_sender.send((uid, connection)).expect("");
+                available_worker_sender
+                    .send((uid, connection))
+                    .expect("Available worker channel should not be closed");
             }
             ProcessingCompletionState::Failed(processed, remaining, duration) => {
                 info!("Miner {uid} failed at assigned work, disconnecting");

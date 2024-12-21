@@ -726,6 +726,10 @@ impl Validator {
         )
         .await;
 
+        while let Ok(_) = self.available_worker_receiver.try_recv() {
+            // Clear available worker queue as to not pollute the next step
+        }
+
         for (uid, weight) in weights.into_iter().enumerate() {
             let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
 
