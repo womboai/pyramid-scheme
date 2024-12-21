@@ -3,26 +3,23 @@ use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
 use crate::validator::worker::{
     ProcessingCompletionResult, ProcessingCompletionState, ProcessingRequest,
 };
+use std::net::TcpStream;
 use std::sync::mpmc::{Receiver, Sender};
-use std::time::Duration;
 use tracing::{debug, info};
 
 pub async fn handle_completion_events(
     neurons: &[NeuronData],
+    available_worker_sender: &Sender<(u16, &'_ mut TcpStream)>,
     completion_receiver: &Receiver<ProcessingCompletionResult>,
     work_queue_sender: &Sender<ProcessingRequest>,
     byte_count: u64,
-    neuron_count: usize,
     metrics: &ValidatorMetrics,
 ) -> Vec<u8> {
     let mut time_per_uid_byte = Vec::new();
     let mut data_processed = 0;
 
     while data_processed < byte_count {
-        let Ok(event) = completion_receiver.try_recv() else {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            continue;
-        };
+        let event = completion_receiver.recv().unwrap();
 
         let uid = event.uid;
 
@@ -39,11 +36,25 @@ pub async fn handle_completion_events(
                 }
 
                 time_per_uid_byte.push((uid, duration, processed));
+
+                let connection = unsafe {
+                    let connection = &mut *neurons[uid as usize].connection.get();
+
+                    match connection {
+                        ConnectionState::Connected(stream) => stream,
+                        _ => panic!("Incorrect connection state for UID {uid}"),
+                    }
+                };
+
+                available_worker_sender.send((uid, connection)).expect("");
             }
-            ProcessingCompletionState::Failed(processed, remaining, mut connection, duration) => {
+            ProcessingCompletionState::Failed(processed, remaining, duration) => {
                 info!("Miner {uid} failed at assigned work, disconnecting");
 
-                *connection.guard = ConnectionState::Disconnected;
+                unsafe {
+                    *neurons[uid as usize].connection.get() = ConnectionState::Disconnected;
+                }
+
                 metrics.connected_miners.add(-1, &[]);
                 data_processed += processed;
 
@@ -63,10 +74,13 @@ pub async fn handle_completion_events(
                     .send(remaining)
                     .expect("Work queue channel should not be closed");
             }
-            ProcessingCompletionState::Cheated(range, mut connection) => {
+            ProcessingCompletionState::Cheated(range) => {
                 info!("Miner {uid} marked as cheater");
 
-                *connection.guard = ConnectionState::Unusable;
+                unsafe {
+                    *neurons[uid as usize].connection.get() = ConnectionState::Unusable;
+                }
+
                 metrics.connected_miners.add(-1, &[]);
                 metrics.cheater_count.add(1, &[]);
 
@@ -106,7 +120,7 @@ pub async fn handle_completion_events(
 
     let range = maximum_time - minimum_time;
 
-    let mut weights = vec![0u8; neuron_count];
+    let mut weights = vec![0u8; neurons.len()];
 
     for (uid, time) in uid_times {
         if range == 0 {

@@ -16,7 +16,6 @@ pub static CHAIN_ENDPOINT: LazyLock<String> = LazyLock::new(|| {
     env::var("CHAIN_ENDPOINT").unwrap_or("wss://entrypoint-finney.opentensor.ai:443".to_owned())
 });
 
-
 pub static AUTO_UPDATE: LazyLock<bool> = LazyLock::new(|| {
     env::var("AUTO_UPDATE")
         .map(|value| {
