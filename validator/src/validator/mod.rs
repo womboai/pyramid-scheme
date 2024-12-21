@@ -39,6 +39,7 @@ mod worker;
 
 const GROW_BY: u64 = 1024 * 1024 * 8;
 const DATA_SPEC_VERSION: u32 = 4;
+const SCORE_SPEC_VERSION: u32 = 1;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -67,6 +68,9 @@ struct ValidatorState {
 
     #[serde(default = "default_version")]
     version: u32,
+
+    #[serde(default = "default_version")]
+    score_version: u32,
 }
 
 impl ValidatorState {
@@ -83,6 +87,7 @@ impl ValidatorState {
             step: 1,
             key_info,
             version: DATA_SPEC_VERSION,
+            score_version: SCORE_SPEC_VERSION,
         }
     }
 }
@@ -93,6 +98,7 @@ impl Default for ValidatorState {
             step: 1,
             key_info: Vec::new(),
             version: DATA_SPEC_VERSION,
+            score_version: SCORE_SPEC_VERSION,
         }
     }
 }
@@ -185,11 +191,9 @@ impl Validator {
         let mut state =
             Self::load_state(neurons.iter().map(|neuron| neuron.hotkey.clone())).unwrap();
 
-        let valid_state = state.version == DATA_SPEC_VERSION;
-
         fs::create_dir_all("state").unwrap();
 
-        if !valid_state {
+        if state.version != DATA_SPEC_VERSION {
             let result = fs::remove_file(CURRENT_ROW_FILE);
 
             if let Err(e) = &result {
@@ -207,6 +211,8 @@ impl Validator {
             }
 
             state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
+        } else if state.score_version != SCORE_SPEC_VERSION {
+            state.key_info.clear();
         }
 
         let current_row_size = Self::current_row_file_size(state.step) as usize;
@@ -382,6 +388,7 @@ impl Validator {
                 .collect(),
             step: self.step,
             version: DATA_SPEC_VERSION,
+            score_version: SCORE_SPEC_VERSION,
         };
 
         let json = serde_json::to_string(&state)?;
