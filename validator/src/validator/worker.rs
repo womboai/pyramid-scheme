@@ -31,7 +31,7 @@ impl ProcessingRequest {
 }
 
 pub enum ProcessingCompletionState {
-    Completed(u64, Duration),
+    Completed(u64, &'static mut TcpStream, Duration),
     Failed(u64, ProcessingRequest, Duration),
     Cheated(ProcessingRequest),
 }
@@ -103,7 +103,7 @@ fn read_len(
 
 fn handle_connection(
     current_row: &mut [u8],
-    connection: &mut TcpStream,
+    connection: &'static mut TcpStream,
     request: ProcessingRequest,
     uid: u16,
 ) -> ProcessingCompletionState {
@@ -213,12 +213,12 @@ fn handle_connection(
         }
     }
 
-    ProcessingCompletionState::Completed(total_processed, time_started.elapsed())
+    ProcessingCompletionState::Completed(total_processed, connection, time_started.elapsed())
 }
 
 pub fn do_work(
     current_row: &SyncUnsafeCell<Vec<u8>>,
-    available_worker_receiver: Receiver<(u16, &'_ mut TcpStream)>,
+    available_worker_receiver: Receiver<(u16, &'static mut TcpStream)>,
     work_queue_receiver: Receiver<ProcessingRequest>,
     completion_sender: Sender<ProcessingCompletionResult>,
 ) {

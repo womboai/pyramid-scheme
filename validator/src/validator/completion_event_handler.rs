@@ -26,7 +26,7 @@ pub async fn handle_completion_events(
         let score = neurons[uid as usize].score.get();
 
         match event.state {
-            ProcessingCompletionState::Completed(processed, duration) => {
+            ProcessingCompletionState::Completed(processed, connection, duration) => {
                 debug!("Miner {uid} finished assigned work");
 
                 data_processed += processed;
@@ -36,15 +36,6 @@ pub async fn handle_completion_events(
                 }
 
                 time_per_uid_byte.push((uid, duration, processed));
-
-                let connection = unsafe {
-                    let connection = &mut *neurons[uid as usize].connection.get();
-
-                    match connection {
-                        ConnectionState::Connected(stream) => stream,
-                        _ => panic!("Incorrect connection state for UID {uid}"),
-                    }
-                };
 
                 available_worker_sender.send((uid, connection)).expect("");
             }
