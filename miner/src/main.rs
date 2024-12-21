@@ -16,7 +16,7 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::simd::{u64x4, LaneCount, Simd, SupportedLaneCount};
+use std::simd::Simd;
 use std::time::{Duration, Instant};
 use std::{io, slice};
 use threadpool::ThreadPool;
@@ -35,100 +35,36 @@ fn as_u8_mut<T>(data: &mut [T]) -> &mut [u8] {
 }
 
 // Ensure that we're always aligned for SIMD access
-#[repr(transparent)]
-#[derive(Clone)]
-struct AlignedChunk(u64x4);
+type Word = u64;
+type AlignedChunk = Simd<Word, 8>;
 
 #[derive(Default)]
 struct Solver {
-    last: u64,
+    last: Word,
 }
 
 impl Solver {
     fn new(last_byte: u8) -> Self {
         Solver {
-            last: u64::from_le_bytes([0, 0, 0, 0, 0, 0, 0, last_byte]),
+            last: Word::from_le_bytes([0, 0, 0, 0, 0, 0, 0, last_byte]),
         }
     }
 
-    /// Solve a chunk of memory aligned to `Simd<u64, N>` in `size_of::<Simd<u64, N>>` chunks
-    /// SAFETY: Safe if `data` is aligned, otherwise the behavior is undefined due to unaligned access
-    unsafe fn solve_chunked<const N: usize>(&mut self, data: &mut [u8])
-    where
-        LaneCount<N>: SupportedLaneCount,
-    {
-        let data = slice::from_raw_parts_mut(
-            data.as_mut_ptr() as *mut Simd<u64, N>,
-            data.len() / size_of::<Simd<u64, N>>(),
-        );
-
+    fn solve(&mut self, data: &mut [AlignedChunk]) {
         for i in 0..data.len() {
-            let mut modified_chunk = Simd::<u64, N>::splat(0);
+            let mut modified_chunk = AlignedChunk::splat(0);
 
-            for j in 0..N {
+            for j in 0..AlignedChunk::LEN {
                 let x = data[i][j];
 
-                modified_chunk[j] = x << 1 | x << 2 | self.last >> 63 | self.last >> 62;
+                modified_chunk[j] =
+                    x << 1 | x << 2 | self.last >> (Word::BITS - 1) | self.last >> (Word::BITS - 2);
 
                 self.last = x;
             }
 
-            data[i] ^= modified_chunk
+            data[i] ^= modified_chunk;
         }
-    }
-
-    fn solve_offset(&mut self, data: &mut [AlignedChunk], offset: usize, read_len: usize) {
-        if read_len == 0 {
-            return;
-        }
-
-        let data_u8 = &mut as_u8_mut(data)[offset..offset + read_len];
-
-        if data_u8.len() <= 8 {
-            let mut x = 0u64;
-
-            for i in 0..data_u8.len() {
-                x |= (data_u8[i] as u64) << (8 * i)
-            }
-
-            data_u8.copy_from_slice(
-                &(x ^ (x << 1 | x << 2 | self.last >> 63 | self.last >> 62))
-                    .to_le_bytes()
-                    .as_slice()[0..data_u8.len()],
-            );
-
-            self.last = x;
-        } else if data_u8.len() < 8 * 2 {
-            unsafe {
-                self.solve_chunked::<1>(data_u8);
-            }
-
-            self.solve_offset(data, offset + read_len - read_len % 8, read_len % 8);
-        } else if data_u8.len() < 8 * 4 {
-            unsafe {
-                self.solve_chunked::<2>(data_u8);
-            }
-
-            self.solve_offset(
-                data,
-                offset + read_len - read_len % (8 * 2),
-                read_len % (8 * 2),
-            );
-        } else {
-            unsafe {
-                self.solve_chunked::<4>(data_u8);
-            }
-
-            self.solve_offset(
-                data,
-                offset + read_len - read_len % (8 * 4),
-                read_len % (8 * 4),
-            );
-        }
-    }
-
-    fn solve(&mut self, data: &mut [AlignedChunk], read_len: usize) {
-        self.solve_offset(data, 0, read_len);
     }
 }
 
@@ -159,7 +95,7 @@ fn handle_step_request(
         }
     };
 
-    info!(
+    debug!(
         "Solving {size} byte chunk for validator {validator_uid}",
         size = request.length,
     );
@@ -187,7 +123,8 @@ fn handle_step_request(
             return false;
         }
 
-        solver.solve(buffer, len);
+        let chunk_len = len.div_ceil(size_of::<AlignedChunk>());
+        solver.solve(&mut buffer[..chunk_len]);
 
         let mut written = 0;
 
@@ -386,7 +323,7 @@ impl Miner {
 #[tokio::main]
 async fn main() {
     load_env();
-    
+
     if *config::AUTO_UPDATE {
         let updater = Updater::new(Duration::from_secs(3600));
         updater.spawn();
@@ -414,7 +351,6 @@ async fn main() {
 mod test {
     use crate::{as_u8, AlignedChunk, Solver};
     use num_bigint::{BigInt, Sign};
-    use std::simd::u64x4;
 
     const STEPS: u64 = u16::MAX as u64;
 
@@ -426,13 +362,13 @@ mod test {
         let vec_size = bits.div_ceil(8).div_ceil(size_of::<AlignedChunk>());
 
         let mut result = Vec::with_capacity(vec_size);
-        result.resize_with(vec_size, || AlignedChunk(u64x4::splat(0)));
-        result[0] = AlignedChunk(u64x4::from_array([1, 0, 0, 0]));
+        result.resize_with(vec_size, || AlignedChunk::splat(0));
+        result[0][0] = 1;
 
         for i in 0..STEPS - 1 {
             let byte_count = (i * 2 + 3).div_ceil(8);
 
-            solver.solve(&mut result, byte_count as usize);
+            solver.solve(&mut result);
 
             expected ^= expected.clone() << 1 | expected.clone() << 2;
 

@@ -1,6 +1,7 @@
 #![feature(portable_simd)]
 #![feature(random)]
 #![feature(mpmc_channel)]
+#![feature(sync_unsafe_cell)]
 
 use crate::api::{current_step, last_n_bits};
 use axum::routing::get;
@@ -52,7 +53,7 @@ async fn main() {
 
     let signer = signer_from_seed(&seed).unwrap();
 
-    setup_logging(&signer.account_id(), true, "validator");
+    setup_logging(&signer.account_id(), false, "validator");
 
     let mut validator = validator::Validator::new(signer, metrics.clone()).await;
 

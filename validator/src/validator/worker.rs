@@ -1,17 +1,14 @@
-use crate::validator::connection::find_suitable_connection;
-use crate::validator::neuron_data::{ConnectionGuard, NeuronData};
-use crate::validator::CurrentRow;
 use neuron::ProcessingNetworkRequest;
+use std::cell::SyncUnsafeCell;
 use std::cmp::min;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::ops::Range;
 use std::random::random;
 use std::sync::mpmc::{Receiver, Sender};
-use std::time::Duration;
-use std::{slice, thread};
-use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use std::time::{Duration, Instant};
+use std::slice;
+use tracing::{debug, warn};
 
 const VALIDATION_CHANCE: f32 = 0.05;
 
@@ -22,11 +19,11 @@ pub struct ProcessingRequest {
 }
 
 impl ProcessingRequest {
-    pub fn new(range: Range<u64>, row: &mut CurrentRow) -> Self {
+    pub fn new(range: Range<u64>, row: &[u8]) -> Self {
         let last_byte = if range.start == 0 {
             0
         } else {
-            row.get_mut()[range.start as usize - 1]
+            row[range.start as usize - 1]
         };
 
         Self { range, last_byte }
@@ -35,8 +32,8 @@ impl ProcessingRequest {
 
 pub enum ProcessingCompletionState {
     Completed(u64, Duration),
-    Failed(u64, ProcessingRequest, ConnectionGuard, Duration),
-    Cheated(ProcessingRequest, ConnectionGuard),
+    Failed(u64, ProcessingRequest, Duration),
+    Cheated(ProcessingRequest),
 }
 
 pub struct ProcessingCompletionResult {
@@ -87,7 +84,7 @@ fn read_len(
         };
 
         if random::<u16>() as f32 / (u16::MAX as f32) < VALIDATION_CHANCE {
-            info!("Verifying results of {uid}");
+            debug!("Verifying results of {uid}");
 
             if !verify_result(&output[read..read + len], last, &buffer[..len]) {
                 return None;
@@ -105,24 +102,23 @@ fn read_len(
 }
 
 fn handle_connection(
-    current_row: &CurrentRow,
-    mut connection: ConnectionGuard,
+    current_row: &mut [u8],
+    connection: &mut TcpStream,
     request: ProcessingRequest,
     uid: u16,
 ) -> ProcessingCompletionState {
-    let start = request.range.start;
-    let end = request.range.end;
-    let buffer_size = 8 * 4 * 256;
-    let mut buffer = Vec::with_capacity(buffer_size as usize);
+    let buffer_size = 8 * 4 * 1024;
 
-    unsafe { buffer.set_len(buffer_size as usize) }
+    let mut buffer = Vec::with_capacity(buffer_size);
 
-    let iterations = (end - start).div_ceil(buffer_size);
+    unsafe { buffer.set_len(buffer_size) }
+
+    let iterations = current_row.len().div_ceil(buffer_size);
 
     let mut last = request.last_byte;
 
     let network_request = ProcessingNetworkRequest {
-        length: end - start,
+        length: current_row.len() as u64,
         last_byte: last,
     };
 
@@ -136,7 +132,7 @@ fn handle_connection(
     if let Err(e) = connection.write(network_request) {
         warn!("Failed to request data processing from miner {uid}, {e}");
 
-        return ProcessingCompletionState::Failed(0, request, connection, Duration::new(0, 0));
+        return ProcessingCompletionState::Failed(0, request, Duration::new(0, 0));
     };
 
     let mut total_processed = 0;
@@ -145,13 +141,13 @@ fn handle_connection(
 
     for i in 0..iterations {
         let mut processed = 0;
-        let from = (start + i * buffer_size) as usize;
-        let to = min(start + (i + 1) * buffer_size, end) as usize;
+        let from = i * buffer_size;
+        let to = min((i + 1) * buffer_size, current_row.len());
 
         while processed != to - from {
             let write_from = from + processed;
 
-            let written = match connection.write(&current_row.get()[write_from..to]) {
+            let written = match connection.write(&current_row[write_from..to]) {
                 Ok(len) => {
                     if len == 0 {
                         warn!(
@@ -161,10 +157,9 @@ fn handle_connection(
                         return ProcessingCompletionState::Failed(
                             total_processed,
                             ProcessingRequest {
-                                range: start + total_processed..end,
+                                range: request.range.start + total_processed..request.range.end,
                                 last_byte: last,
                             },
-                            connection,
                             time_started.elapsed(),
                         );
                     }
@@ -177,30 +172,27 @@ fn handle_connection(
                     return ProcessingCompletionState::Failed(
                         total_processed,
                         ProcessingRequest {
-                            range: start + total_processed..end,
+                            range: request.range.start + total_processed..request.range.end,
                             last_byte: last,
                         },
-                        connection,
                         time_started.elapsed(),
                     );
                 }
             };
 
-            let last_byte = current_row.get()[write_from + written - 1];
+            let last_byte = current_row[write_from + written - 1];
 
-            let read = unsafe {
-                read_len(
-                    &mut connection,
-                    &mut buffer,
-                    &mut current_row.get_mut_unchecked()[write_from..write_from + written],
-                    written,
-                    last,
-                    uid,
-                )
-            };
+            let read = read_len(
+                connection,
+                &mut buffer,
+                &mut current_row[write_from..write_from + written],
+                written,
+                last,
+                uid,
+            );
 
             let Some(read) = read else {
-                return ProcessingCompletionState::Cheated(request, connection);
+                return ProcessingCompletionState::Cheated(request);
             };
 
             last = last_byte;
@@ -212,10 +204,9 @@ fn handle_connection(
                 return ProcessingCompletionState::Failed(
                     total_processed,
                     ProcessingRequest {
-                        range: start + total_processed..end,
+                        range: request.range.start + total_processed..request.range.end,
                         last_byte: last,
                     },
-                    connection,
                     time_started.elapsed(),
                 );
             }
@@ -226,22 +217,28 @@ fn handle_connection(
 }
 
 pub fn do_work(
-    current_row: &CurrentRow,
-    neurons: &Vec<NeuronData>,
+    current_row: &SyncUnsafeCell<Vec<u8>>,
+    available_worker_receiver: Receiver<(u16, &'_ mut TcpStream)>,
     work_queue_receiver: Receiver<ProcessingRequest>,
     completion_sender: Sender<ProcessingCompletionResult>,
 ) {
     loop {
-        let Ok(request) = work_queue_receiver.try_recv() else {
-            thread::sleep(Duration::from_millis(1));
-            continue;
-        };
+        let request = work_queue_receiver.recv().unwrap();
 
         debug!("Finding suitable miner for {request:?}");
 
-        let (uid, connection) = find_suitable_connection(neurons);
+        let (uid, connection) = available_worker_receiver.recv().unwrap();
 
         debug!("Assigned {request:?} to miner {uid}");
+
+        let current_row = unsafe {
+            slice::from_raw_parts_mut(
+                (*current_row.get())
+                    .as_mut_ptr()
+                    .add(request.range.start as usize),
+                (request.range.end - request.range.start) as usize,
+            )
+        };
 
         let state = handle_connection(current_row, connection, request, uid);
 

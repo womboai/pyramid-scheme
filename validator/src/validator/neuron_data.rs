@@ -1,12 +1,9 @@
 use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
-use std::mem::transmute;
+use std::cell::SyncUnsafeCell;
 use std::net::TcpStream;
 use std::num::NonZeroU8;
-use std::ops::{Add, AddAssign, Deref, DerefMut};
-use std::sync::{Mutex, MutexGuard};
+use std::ops::{Add, AddAssign};
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Score {
@@ -58,60 +55,11 @@ impl ConnectionState {
     }
 }
 
-pub struct ConnectionGuard {
-    // Incorrect lifetimes, but must live within threads
-    pub guard: MutexGuard<'static, ConnectionState>,
-    phantom: PhantomData<&'static mut TcpStream>,
-}
-
-unsafe impl Send for ConnectionGuard {}
-
-impl ConnectionGuard {
-    pub fn new<'a>(guard: MutexGuard<'a, ConnectionState>) -> Self {
-        let guard = unsafe {
-            // UNSAFE: Extend lifetime to allow connection guard to be used between threads
-            transmute::<MutexGuard<'a, ConnectionState>, MutexGuard<'static, ConnectionState>>(
-                guard,
-            )
-        };
-
-        Self {
-            guard,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl Deref for ConnectionGuard {
-    type Target = TcpStream;
-
-    fn deref(&self) -> &Self::Target {
-        let ConnectionState::Connected(stream) = &*self.guard else {
-            unreachable!();
-        };
-
-        stream
-    }
-}
-
-impl DerefMut for ConnectionGuard {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        let ConnectionState::Connected(stream) = &mut *self.guard else {
-            unreachable!();
-        };
-
-        stream
-    }
-}
-
 pub struct NeuronData {
     pub info: NeuronInfoLite,
 
     pub weight: NonZeroU8,
-    pub score: UnsafeCell<Score>,
+    pub score: SyncUnsafeCell<Score>,
 
-    pub connection: Mutex<ConnectionState>,
+    pub connection: SyncUnsafeCell<ConnectionState>,
 }
-
-unsafe impl Send for NeuronData {}
-unsafe impl Sync for NeuronData {}

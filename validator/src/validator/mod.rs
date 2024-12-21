@@ -1,12 +1,11 @@
 use neuron::{config, subtensor, INTEGRAL_VERSION};
 use rusttensor::{AccountId, Block, BlockNumber};
 
-use crate::validator::memory_storage::{MemoryMapped, MemoryMappedFile, MemoryMappedStorage};
 use crate::validator::metrics::ValidatorMetrics;
 use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
 
 use crate::validator::completion_event_handler::handle_completion_events;
-use crate::validator::connection::{connect_to_miner, worker_count_hint, worker_weights};
+use crate::validator::connection::{connect_to_miner, worker_connections, worker_count_hint};
 use crate::validator::worker::{do_work, ProcessingCompletionResult, ProcessingRequest};
 use anyhow::Result;
 use rusttensor::api::apis;
@@ -16,12 +15,14 @@ use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::Signer;
 use rusttensor::weights::{set_weights_payload, NormalizedWeight};
 use serde::{Deserialize, Serialize};
-use std::cell::UnsafeCell;
+use std::cell::SyncUnsafeCell;
 use std::cmp::min;
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{ErrorKind, Read, Write};
 use std::mem::transmute;
+use std::net::TcpStream;
 use std::num::NonZeroU8;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
@@ -32,7 +33,6 @@ use tracing::{debug, error, info};
 
 mod completion_event_handler;
 mod connection;
-mod memory_storage;
 pub mod metrics;
 mod neuron_data;
 mod worker;
@@ -43,42 +43,6 @@ const DATA_SPEC_VERSION: u32 = 4;
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
 pub(crate) const CENTER_COLUMN_FILE: &'static str = "state/center_column.bin";
-
-struct CurrentRow(UnsafeCell<MemoryMappedStorage>);
-
-impl CurrentRow {
-    fn get_mut(&mut self) -> &mut MemoryMappedStorage {
-        self.0.get_mut()
-    }
-
-    unsafe fn get_mut_unchecked(&self) -> &mut [u8] {
-        &mut *self.0.get()
-    }
-
-    fn get(&self) -> &[u8] {
-        unsafe { &*self.0.get() }
-    }
-}
-
-impl MemoryMapped for CurrentRow {
-    fn open(path: impl AsRef<Path>, initial_capacity: u64) -> std::io::Result<Self> {
-        Ok(Self(UnsafeCell::new(MemoryMappedStorage::open(
-            path,
-            initial_capacity,
-        )?)))
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.get_mut().flush()
-    }
-
-    fn ensure_capacity(&mut self, capacity: u64) -> std::io::Result<()> {
-        self.get_mut().ensure_capacity(capacity)
-    }
-}
-
-unsafe impl Send for CurrentRow {}
-unsafe impl Sync for CurrentRow {}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
@@ -139,8 +103,8 @@ pub struct Validator {
     neurons: Pin<Box<Vec<NeuronData>>>,
     pub(crate) uid: u16,
 
-    current_row: Pin<Box<CurrentRow>>,
-    center_column: MemoryMappedFile,
+    current_row: Pin<Box<SyncUnsafeCell<Vec<u8>>>>,
+    center_column: Vec<u8>,
     step: u64,
 
     current_block: Block,
@@ -149,6 +113,10 @@ pub struct Validator {
 
     work_queue_sender: Sender<ProcessingRequest>,
     work_queue_receiver: Receiver<ProcessingRequest>,
+
+    available_worker_sender: Sender<(u16, &'static mut TcpStream)>,
+    available_worker_receiver: Receiver<(u16, &'static mut TcpStream)>,
+
     completion_sender: Sender<ProcessingCompletionResult>,
     completion_receiver: Receiver<ProcessingCompletionResult>,
 
@@ -184,11 +152,11 @@ impl Validator {
     }
 
     fn current_row_file_size(step: u64) -> u64 {
-        (Self::step_to_grow_to(step) * 2 - 1).div_ceil(8)
+        (Self::step_to_grow_to(step) * 2 - 1).div_ceil(u8::BITS as u64)
     }
 
     fn center_column_file_size(step: u64) -> u64 {
-        Self::step_to_grow_to(step).div_ceil(8)
+        Self::step_to_grow_to(step).div_ceil(u8::BITS as u64)
     }
 
     pub async fn new(signer: Signer, metrics: Arc<ValidatorMetrics>) -> Self {
@@ -196,9 +164,11 @@ impl Validator {
 
         let current_block = subtensor.blocks().at_latest().await.unwrap();
         let runtime_api = subtensor.runtime_api().at(current_block.reference());
+
         let neurons_payload = apis()
             .neuron_info_runtime_api()
             .get_neurons_lite(*config::NETUID);
+
         let neurons = call_runtime_api_decoded(&runtime_api, neurons_payload)
             .await
             .unwrap();
@@ -239,22 +209,40 @@ impl Validator {
             state = ValidatorState::for_hotkeys(neurons.iter().map(|neuron| neuron.hotkey.clone()));
         }
 
-        let current_row =
-            CurrentRow::open(CURRENT_ROW_FILE, Self::current_row_file_size(state.step)).unwrap();
+        let current_row_size = Self::current_row_file_size(state.step) as usize;
+        let center_column_size = Self::center_column_file_size(state.step) as usize;
 
-        let mut current_row = Box::pin(current_row);
+        let mut current_row = if fs::exists(CURRENT_ROW_FILE).unwrap() {
+            let mut current_row = Vec::with_capacity(current_row_size);
 
-        let mut center_column = MemoryMappedFile::open(
-            CENTER_COLUMN_FILE,
-            Self::center_column_file_size(state.step),
-        )
-        .unwrap();
+            let mut current_row_file = File::open(CURRENT_ROW_FILE).unwrap();
+
+            current_row_file.read_to_end(&mut current_row).unwrap();
+
+            current_row
+        } else {
+            vec![0; current_row_size]
+        };
+
+        let mut center_column = if fs::exists(CENTER_COLUMN_FILE).unwrap() {
+            let mut current_row = Vec::with_capacity(center_column_size);
+
+            let mut current_row_file = File::open(CENTER_COLUMN_FILE).unwrap();
+
+            current_row_file.read_to_end(&mut current_row).unwrap();
+
+            current_row
+        } else {
+            vec![0; center_column_size]
+        };
 
         if state.step == 1 {
             // Initial state
-            current_row.get_mut()[0] = 1;
+            current_row[0] = 1;
             center_column[0] = 1;
         }
+
+        let current_row = Box::pin(current_row.into());
 
         let neurons = thread::scope(|scope| {
             let handles = neurons
@@ -305,6 +293,7 @@ impl Validator {
         let mut neurons = Box::pin(neurons);
 
         let (work_queue_sender, work_queue_receiver) = mpmc::channel();
+        let (available_worker_sender, available_worker_receiver) = mpmc::channel();
         let (completion_sender, completion_receiver) = mpmc::channel();
 
         let worker_count = worker_count_hint(&mut neurons);
@@ -313,17 +302,23 @@ impl Validator {
 
         let worker_threads = (0..worker_count)
             .map(|_| {
-                let current_row =
-                    unsafe { transmute::<&CurrentRow, &'static CurrentRow>(&current_row) };
+                let current_row = unsafe {
+                    transmute::<&SyncUnsafeCell<Vec<u8>>, &'static SyncUnsafeCell<Vec<u8>>>(
+                        &current_row,
+                    )
+                };
 
-                let neurons =
-                    unsafe { transmute::<&Vec<NeuronData>, &'static Vec<NeuronData>>(&neurons) };
-
+                let available_worker_receiver = available_worker_receiver.clone();
                 let work_queue_receiver = work_queue_receiver.clone();
                 let completion_sender = completion_sender.clone();
 
                 thread::spawn(move || {
-                    do_work(current_row, neurons, work_queue_receiver, completion_sender)
+                    do_work(
+                        current_row,
+                        available_worker_receiver,
+                        work_queue_receiver,
+                        completion_sender,
+                    )
                 })
             })
             .collect();
@@ -343,6 +338,10 @@ impl Validator {
 
             work_queue_sender,
             work_queue_receiver,
+
+            available_worker_sender,
+            available_worker_receiver,
+
             completion_sender,
             completion_receiver,
 
@@ -355,8 +354,17 @@ impl Validator {
     fn save_state(&mut self) -> Result<()> {
         let path = PathBuf::from(STATE_DATA_FILE);
 
-        self.center_column.flush()?;
-        self.current_row.flush()?;
+        {
+            let mut file = File::create(CURRENT_ROW_FILE)?;
+
+            file.write_all(self.current_row.get_mut())?;
+        }
+
+        {
+            let mut file = File::create(CENTER_COLUMN_FILE)?;
+
+            file.write_all(&self.center_column)?;
+        }
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -463,6 +471,8 @@ impl Validator {
         if set_weights {
             info!("Syncing metagraph and connecting to miners");
 
+            self.save_state()?;
+
             let runtime_api = self
                 .subtensor
                 .runtime_api()
@@ -507,10 +517,8 @@ impl Validator {
                         info,
                     };
                 } else {
-                    if matches!(
-                        neuron.connection.get_mut().expect("Lock poisoned"),
-                        ConnectionState::Disconnected
-                    ) || neurons[i].axon_info != neuron.info.axon_info
+                    if matches!(neuron.connection.get_mut(), ConnectionState::Disconnected)
+                        || neurons[i].axon_info != neuron.info.axon_info
                     {
                         neuron.connection = connect_to_miner(
                             &self.signer,
@@ -558,18 +566,23 @@ impl Validator {
                 info!("Spawning {extra_workers} extra worker threads");
 
                 for _ in 0..extra_workers {
-                    let current_row =
-                        unsafe { transmute::<&CurrentRow, &'static CurrentRow>(&self.current_row) };
-
-                    let neurons = unsafe {
-                        transmute::<&Vec<NeuronData>, &'static Vec<NeuronData>>(&self.neurons)
+                    let current_row = unsafe {
+                        transmute::<&SyncUnsafeCell<Vec<u8>>, &'static SyncUnsafeCell<Vec<u8>>>(
+                            &self.current_row,
+                        )
                     };
 
+                    let available_worker_receiver = self.available_worker_receiver.clone();
                     let work_queue_receiver = self.work_queue_receiver.clone();
                     let completion_sender = self.completion_sender.clone();
 
                     self.worker_threads.push(thread::spawn(move || {
-                        do_work(current_row, neurons, work_queue_receiver, completion_sender)
+                        do_work(
+                            current_row,
+                            available_worker_receiver,
+                            work_queue_receiver,
+                            completion_sender,
+                        )
                     }))
                 }
             }
@@ -585,17 +598,10 @@ impl Validator {
     async fn do_step(&mut self) -> Result<()> {
         let start = Instant::now();
 
-        info!("Evolution step {}", self.step);
-
         let mut elapsed_blocks = self.current_block.number()
             - self.neurons[self.uid as usize].info.last_update.0 as BlockNumber;
 
         let should_sleep = if !self.attempted_set_weights {
-            info!(
-                "Current block is {block}, it has been {elapsed_blocks} blocks since last update",
-                block = self.current_block.number()
-            );
-
             if elapsed_blocks >= *config::EPOCH_LENGTH {
                 let set_weights = self.sync().await?;
 
@@ -609,9 +615,9 @@ impl Validator {
             true
         };
 
-        let worker_weights = worker_weights(&mut self.neurons);
+        let worker_connections = worker_connections(&mut self.neurons);
 
-        if worker_weights.is_empty() {
+        if worker_connections.is_empty() {
             if should_sleep {
                 let blocks = *config::EPOCH_LENGTH - elapsed_blocks;
 
@@ -625,22 +631,38 @@ impl Validator {
             return Ok(());
         }
 
-        self.current_row
-            .ensure_capacity(Self::current_row_file_size(self.step))?;
+        {
+            let current_row = self.current_row.get_mut();
+            let new_length = Self::current_row_file_size(self.step);
 
-        self.center_column
-            .ensure_capacity(Self::center_column_file_size(self.step))?;
+            if current_row.len() < new_length as usize {
+                current_row.resize(new_length as usize, 0);
+            }
+        }
 
-        info!("Splitting work into {} [+1] chunks", worker_weights.len());
+        {
+            let new_length = Self::center_column_file_size(self.step);
+
+            if self.center_column.len() < new_length as usize {
+                self.center_column.resize(new_length as usize, 0);
+            }
+        }
+
+        debug!(
+            "Splitting work into {} [+1] chunks",
+            worker_connections.len()
+        );
 
         let byte_count = (self.step * 2 + 3).div_ceil(8);
 
-        let weight_sum: u32 = worker_weights.iter().copied().map(|x| x as u32).sum();
+        let weight_sum: u32 = worker_connections.iter().map(|x| x.weight as u32).sum();
 
         let mut position = 0;
 
-        for weight in &worker_weights {
-            let chunk_size = (byte_count * *weight as u64) / weight_sum as u64;
+        let mut worker_connections = worker_connections.into_iter();
+
+        for connection in &mut worker_connections {
+            let chunk_size = (byte_count * connection.weight as u64) / weight_sum as u64;
 
             if chunk_size == 0 {
                 continue;
@@ -660,8 +682,12 @@ impl Validator {
             debug!("Adding {range:?} to work queue");
 
             self.work_queue_sender
-                .send(ProcessingRequest::new(range, &mut self.current_row))
+                .send(ProcessingRequest::new(range, self.current_row.get_mut()))
                 .expect("Work queue channel should not be closed");
+
+            self.available_worker_sender
+                .send((connection.uid, connection.stream))
+                .expect("Available worker channel should not be closed");
 
             position = end;
 
@@ -670,23 +696,32 @@ impl Validator {
             }
         }
 
+        for connection in worker_connections {
+            self.available_worker_sender
+                .send((connection.uid, connection.stream))
+                .expect("Available worker channel should not be closed");
+        }
+
         if position != byte_count {
-            debug!("Adding {range:?} to work queue", range = position..byte_count);
+            debug!(
+                "Adding {range:?} to work queue",
+                range = position..byte_count
+            );
 
             self.work_queue_sender
                 .send(ProcessingRequest::new(
                     position..byte_count,
-                    &mut self.current_row,
+                    self.current_row.get_mut(),
                 ))
                 .expect("Work queue channel should not be closed");
         }
 
         let weights = handle_completion_events(
             &self.neurons,
+            &self.available_worker_sender,
             &self.completion_receiver,
             &self.work_queue_sender,
             byte_count,
-            self.neurons.len(),
             &self.metrics,
         )
         .await;
@@ -697,19 +732,22 @@ impl Validator {
             self.neurons[uid].weight = weight;
         }
 
-        let bit_index = self.step % 8;
-        let part = self.step / 8;
+        let bit_index = self.step % u8::BITS as u64;
+        let part = self.step / u8::BITS as u64;
         let current_row_part = (self.current_row.get_mut()[part as usize] >> bit_index) & 0b1;
 
         self.center_column[part as usize] |= current_row_part << bit_index;
 
         self.step += 1;
+
         self.save_state()?;
 
         self.metrics.evolution_steps.record(self.step, &[]);
+
         self.metrics
             .step_duration
             .record(start.elapsed().as_secs_f64(), &[]);
+
         Ok(())
     }
 
@@ -733,6 +771,16 @@ impl Validator {
                 self.current_block = block;
                 self.last_block_fetch = Instant::now();
                 self.attempted_set_weights = false;
+
+                let elapsed_blocks = self.current_block.number()
+                    - self.neurons[self.uid as usize].info.last_update.0 as BlockNumber;
+
+                info!("Evolution step {}", self.step);
+
+                info!(
+                    "Current block is {block}, it has been {elapsed_blocks} blocks since last update",
+                    block = self.current_block.number(),
+                );
             }
 
             if let Err(e) = self.do_step().await {
