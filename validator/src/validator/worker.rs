@@ -102,7 +102,7 @@ fn read_len(
 }
 
 fn handle_connection(
-    current_row: &mut [u8],
+    work_chunk: &mut [u8],
     connection: &'static mut TcpStream,
     request: ProcessingRequest,
     uid: u16,
@@ -113,12 +113,12 @@ fn handle_connection(
 
     unsafe { buffer.set_len(buffer_size) }
 
-    let iterations = current_row.len().div_ceil(buffer_size);
+    let iterations = work_chunk.len().div_ceil(buffer_size);
 
     let mut last = request.last_byte;
 
     let network_request = ProcessingNetworkRequest {
-        length: current_row.len() as u64,
+        length: work_chunk.len() as u64,
         last_byte: last,
     };
 
@@ -142,12 +142,12 @@ fn handle_connection(
     for i in 0..iterations {
         let mut processed = 0;
         let from = i * buffer_size;
-        let to = min((i + 1) * buffer_size, current_row.len());
+        let to = min((i + 1) * buffer_size, work_chunk.len());
 
         while processed != to - from {
             let write_from = from + processed;
 
-            let written = match connection.write(&current_row[write_from..to]) {
+            let written = match connection.write(&work_chunk[write_from..to]) {
                 Ok(len) => {
                     if len == 0 {
                         warn!(
@@ -180,12 +180,12 @@ fn handle_connection(
                 }
             };
 
-            let last_byte = current_row[write_from + written - 1];
+            let last_byte = work_chunk[write_from + written - 1];
 
             let read = read_len(
                 connection,
                 &mut buffer,
-                &mut current_row[write_from..write_from + written],
+                &mut work_chunk[write_from..write_from + written],
                 written,
                 last,
                 uid,
@@ -231,16 +231,11 @@ pub fn do_work(
 
         debug!("Assigned {request:?} to miner {uid}");
 
-        let current_row = unsafe {
-            slice::from_raw_parts_mut(
-                (*current_row.get())
-                    .as_mut_ptr()
-                    .add(request.range.start as usize),
-                (request.range.end - request.range.start) as usize,
-            )
+        let work_chunk = unsafe {
+            &mut (*current_row.get())[request.range.start as usize..request.range.end as usize]
         };
 
-        let state = handle_connection(current_row, connection, request, uid);
+        let state = handle_connection(work_chunk, connection, request, uid);
 
         completion_sender
             .send(ProcessingCompletionResult { state, uid })
