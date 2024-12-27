@@ -7913,7 +7913,7 @@ dependencies = [
 
 [[package]]
 name = "pyramid-scheme-miner"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -7928,7 +7928,7 @@ dependencies = [
 
 [[package]]
 name = "pyramid-scheme-neuron"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -7945,7 +7945,7 @@ dependencies = [
 
 [[package]]
 name = "pyramid-scheme-validator"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "axum",

@@ -16,7 +16,7 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::simd::Simd;
+use std::simd::{Simd, ToBytes};
 use std::time::{Duration, Instant};
 use std::{io, slice};
 use threadpool::ThreadPool;
@@ -124,7 +124,20 @@ fn handle_step_request(
         }
 
         let chunk_len = len.div_ceil(size_of::<AlignedChunk>());
+        let last_word_bytes = len % size_of::<AlignedChunk>();
+
+        let extra_bytes = if last_word_bytes == 0 {
+            0
+        } else {
+            size_of::<AlignedChunk>() - last_word_bytes
+        };
+
+        let word_index = AlignedChunk::LEN - (extra_bytes / size_of::<Word>()) - 1;
+        let last = buffer[chunk_len - 1][word_index];
+
         solver.solve(&mut buffer[..chunk_len]);
+
+        solver.last = last;
 
         let mut written = 0;
 

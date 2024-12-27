@@ -70,7 +70,7 @@ impl From<&Version> for u64 {
     }
 }
 
-pub const SPEC_VERSION: u32 = 2;
+pub const SPEC_VERSION: u32 = 3;
 
 pub const VERSION_STRING: &'static str = env!("CARGO_PKG_VERSION");
 

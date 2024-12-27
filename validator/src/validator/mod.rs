@@ -38,7 +38,7 @@ mod neuron_data;
 mod worker;
 
 const GROW_BY: u64 = 1024 * 1024 * 8;
-const DATA_SPEC_VERSION: u32 = 4;
+const DATA_SPEC_VERSION: u32 = 5;
 const SCORE_SPEC_VERSION: u32 = 1;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
