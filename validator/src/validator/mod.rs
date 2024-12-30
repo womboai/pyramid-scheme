@@ -669,7 +669,7 @@ impl Validator {
         let mut worker_connections = worker_connections.into_iter();
 
         for connection in &mut worker_connections {
-            let chunk_size = (byte_count * connection.weight as u64) / weight_sum as u64;
+            let chunk_size = (byte_count * connection.weight as u64).div_ceil(weight_sum as u64);
 
             if chunk_size == 0 {
                 continue;
