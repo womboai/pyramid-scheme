@@ -1,4 +1,4 @@
-use neuron::{config, subtensor, INTEGRAL_VERSION};
+use neuron::{config, should_restart, subtensor, INTEGRAL_VERSION};
 use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::metrics::ValidatorMetrics;
@@ -28,6 +28,7 @@ use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
+use std::process::exit;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -74,7 +75,7 @@ struct ValidatorState {
 }
 
 impl ValidatorState {
-    fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
+    fn for_hotkeys(hotkeys: impl Iterator<Item=AccountId>) -> Self {
         let key_info = hotkeys
             .map(|hotkey| KeyScoreInfo {
                 hotkey,
@@ -268,7 +269,7 @@ impl Validator {
                                     matches!(state_info.unwrap().score, Score::Cheater),
                                     &metrics,
                                 )
-                                .into(),
+                                    .into(),
                                 info,
                             }
                         } else {
@@ -282,7 +283,7 @@ impl Validator {
                                     false,
                                     &metrics,
                                 )
-                                .into(),
+                                    .into(),
                                 info,
                             }
                         }
@@ -398,7 +399,7 @@ impl Validator {
         Ok(())
     }
 
-    fn load_state(hotkeys: impl Iterator<Item = AccountId>) -> Result<ValidatorState> {
+    fn load_state(hotkeys: impl Iterator<Item=AccountId>) -> Result<ValidatorState> {
         info!("Loading state");
 
         let path = PathBuf::from(STATE_DATA_FILE);
@@ -491,7 +492,7 @@ impl Validator {
                     .neuron_info_runtime_api()
                     .get_neurons_lite(*config::NETUID),
             )
-            .await?;
+                .await?;
 
             let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
@@ -520,7 +521,7 @@ impl Validator {
                             false,
                             &self.metrics,
                         )
-                        .into(),
+                            .into(),
                         info,
                     };
                 } else {
@@ -534,7 +535,7 @@ impl Validator {
                             matches!(*neuron.score.get_mut(), Score::Cheater),
                             &self.metrics,
                         )
-                        .into()
+                            .into()
                     }
 
                     neuron.info = neurons[i].clone();
@@ -559,7 +560,7 @@ impl Validator {
                             false,
                             &self.metrics,
                         )
-                        .into(),
+                            .into(),
                         info,
                     }
                 });
@@ -731,7 +732,7 @@ impl Validator {
             byte_count,
             &self.metrics,
         )
-        .await;
+            .await;
 
         while let Ok(_) = self.available_worker_receiver.try_recv() {
             // Clear available worker queue as to not pollute the next step
@@ -768,10 +769,13 @@ impl Validator {
                 let block = match self.subtensor.blocks().at_latest().await {
                     Ok(block) => block,
                     Err(e) => {
-                        error!("Failed to fetch block, {e}");
-                        info!("Restarting subtensor client");
+                        if should_restart(&e) {
+                            error!("Irrecoverable RPC error, restarting");
 
-                        self.subtensor = subtensor().await.unwrap();
+                            exit(1);
+                        }
+
+                        error!("Failed to fetch block, {e}");
 
                         tokio::time::sleep(Duration::from_secs(12)).await;
 

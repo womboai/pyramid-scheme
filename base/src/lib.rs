@@ -15,6 +15,7 @@ use std::iter::Iterator;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::LazyLock;
+use subxt::error::RpcError;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -137,4 +138,16 @@ pub fn setup_logging(account_id: &AccountId, telmetry: bool, neuron_type: &'stat
     }
 
     info!("Starting {neuron_type} v{VERSION_STRING}");
+}
+
+pub fn should_restart(error: &subxt::Error) -> bool {
+    if let subxt::Error::Rpc(RpcError::ClientError(client_error)) = error {
+        let error = client_error.downcast_ref::<jsonrpsee::core::client::Error>();
+
+        if let Some(jsonrpsee::core::client::Error::RestartNeeded(_)) = error {
+            return true;
+        }
+    }
+
+    false
 }

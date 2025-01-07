@@ -16,6 +16,8 @@ opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
 opentelemetry-otlp = "0.26.0"
 
 rusttensor = { git = "https://github.com/womboai/rusttensor", tag = "v0.3.0" }
+subxt = "0.38.0"
+jsonrpsee = "0.24.7"
 
 tracing = "0.1.40"
 dirs = "5.0.1"

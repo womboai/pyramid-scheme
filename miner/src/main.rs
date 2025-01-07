@@ -4,9 +4,9 @@ use crate::signature_checking::info_matches;
 use anyhow::Result;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_logging, subtensor, ProcessingNetworkRequest, SPEC_VERSION};
+use neuron::{config, load_env, setup_logging, should_restart, subtensor, ProcessingNetworkRequest, SPEC_VERSION};
 use rusttensor::api::apis;
-use rusttensor::rpc::call_runtime_api_decoded;
+use rusttensor::rpc::{call_runtime_api_decoded, RuntimeApiError};
 use rusttensor::rpc::types::NeuronInfoLite;
 use rusttensor::sign::{verify_signature, KeypairSignature};
 use rusttensor::subtensor::Subtensor;
@@ -16,9 +16,10 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::simd::{Simd, ToBytes};
+use std::simd::Simd;
 use std::time::{Duration, Instant};
 use std::{io, slice};
+use std::process::exit;
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
 
@@ -230,7 +231,7 @@ impl Miner {
         }
     }
 
-    async fn sync(&mut self, now: Instant) -> Result<()> {
+    async fn sync(&mut self, now: Instant) -> Result<(), RuntimeApiError> {
         self.current_block = self.subtensor.blocks().at_latest().await?;
         self.last_block_fetch = now;
 
@@ -239,6 +240,7 @@ impl Miner {
                 .subtensor
                 .runtime_api()
                 .at(self.current_block.reference());
+
             self.neurons = call_runtime_api_decoded(
                 &runtime_api,
                 apis()
@@ -274,10 +276,15 @@ impl Miner {
 
             if now - self.last_block_fetch >= Duration::from_secs(12) {
                 if let Err(e) = self.sync(now).await {
-                    error!("Failed to sync metagraph: {e}");
+                    if let RuntimeApiError::CallError(error) = &e {
+                        if should_restart(error) {
+                            error!("Irrecoverable RPC error, restarting");
 
-                    info!("Restarting subtensor client");
-                    self.subtensor = subtensor().await.unwrap();
+                            exit(1);
+                        }
+                    }
+
+                    error!("Failed to sync metagraph: {e}");
 
                     tokio::time::sleep(Duration::from_secs(12)).await;
 
