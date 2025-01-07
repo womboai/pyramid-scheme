@@ -14,7 +14,7 @@ pub async fn handle_completion_events(
     work_queue_sender: &Sender<ProcessingRequest>,
     byte_count: u64,
     metrics: &ValidatorMetrics,
-) -> Vec<u8> {
+) -> Vec<(u16, u8)> {
     let mut time_per_uid_byte = Vec::new();
     let mut data_processed = 0;
 
@@ -113,19 +113,17 @@ pub async fn handle_completion_events(
 
     let range = maximum_time - minimum_time;
 
-    let mut weights = vec![0u8; neurons.len()];
+    uid_times
+        .iter()
+        .map(|(uid, time)| {
+            if range == 0 {
+                return (*uid, u8::MAX);
+            }
 
-    for (uid, time) in uid_times {
-        if range == 0 {
-            weights[uid as usize] = u8::MAX;
-            continue;
-        }
+            let contribution_time = u8::MAX as u128 * (time - minimum_time);
+            let inverse_weight = contribution_time / range;
 
-        let contribution_time = u8::MAX as u128 * (time - minimum_time);
-        let inverse_weight = contribution_time / range;
-
-        weights[uid as usize] = u8::MAX - inverse_weight as u8;
-    }
-
-    weights
+            (*uid, u8::MAX - inverse_weight as u8)
+        })
+        .collect()
 }

@@ -5,9 +5,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::ops::Range;
 use std::random::random;
+use std::slice;
 use std::sync::mpmc::{Receiver, Sender};
 use std::time::{Duration, Instant};
-use std::slice;
 use tracing::{debug, warn};
 
 const VALIDATION_CHANCE: f32 = 0.05;

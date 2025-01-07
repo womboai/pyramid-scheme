@@ -4,10 +4,13 @@ use crate::signature_checking::info_matches;
 use anyhow::Result;
 use neuron::auth::VerificationMessage;
 use neuron::updater::Updater;
-use neuron::{config, load_env, setup_logging, should_restart, subtensor, ProcessingNetworkRequest, SPEC_VERSION};
+use neuron::{
+    config, load_env, setup_logging, should_restart, subtensor, ProcessingNetworkRequest,
+    SPEC_VERSION,
+};
 use rusttensor::api::apis;
-use rusttensor::rpc::{call_runtime_api_decoded, RuntimeApiError};
 use rusttensor::rpc::types::NeuronInfoLite;
+use rusttensor::rpc::{call_runtime_api_decoded, RuntimeApiError};
 use rusttensor::sign::{verify_signature, KeypairSignature};
 use rusttensor::subtensor::Subtensor;
 use rusttensor::wallet::{hotkey_location, load_key_account_id};
@@ -16,11 +19,11 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::process::exit;
 use std::simd::Simd;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{env, io, slice};
-use std::process::exit;
-use std::sync::LazyLock;
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
 
@@ -40,8 +43,8 @@ static STAKE_THRESHOLD: LazyLock<u64> = LazyLock::new(|| {
     (env::var("STAKE_THRESHOLD")
         .as_ref()
         .map(|var| var.parse().unwrap())
-        .unwrap_or(4000.0) * 1_000_000_000f64
-    ) as u64
+        .unwrap_or(4000.0)
+        * 1_000_000_000f64) as u64
 });
 
 // Ensure that we're always aligned for SIMD access
@@ -219,8 +222,8 @@ impl Miner {
                 .neuron_info_runtime_api()
                 .get_neurons_lite(*config::NETUID),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let neuron = neurons
             .iter()
@@ -256,7 +259,7 @@ impl Miner {
                     .neuron_info_runtime_api()
                     .get_neurons_lite(*config::NETUID),
             )
-                .await?;
+            .await?;
 
             let neuron = self
                 .neurons
@@ -344,13 +347,20 @@ impl Miner {
                         continue;
                     }
 
-                    if neuron.stake.iter().map(|(_, stake)| stake.0).sum::<u64>() < *STAKE_THRESHOLD {
-                        info!("IP {address} with UID {uid} does not have enough stake, disconnecting", uid = message.validator.uid);
+                    if neuron.stake.iter().map(|(_, stake)| stake.0).sum::<u64>() < *STAKE_THRESHOLD
+                    {
+                        info!(
+                            "IP {address} with UID {uid} does not have enough stake, disconnecting",
+                            uid = message.validator.uid
+                        );
                         continue;
                     }
                 }
 
-                info!("IP {address} is confirmed to be Validator UID {uid}", uid = message.validator.uid);
+                info!(
+                    "IP {address} is confirmed to be Validator UID {uid}",
+                    uid = message.validator.uid
+                );
 
                 if let Err(e) = stream.write(&SPEC_VERSION.to_le_bytes()) {
                     warn!(

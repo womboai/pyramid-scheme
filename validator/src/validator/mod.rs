@@ -24,11 +24,11 @@ use std::net::TcpStream;
 use std::num::NonZeroU8;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::process::exit;
 use std::sync::mpmc::{Receiver, Sender};
 use std::sync::{mpmc, Arc};
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
-use std::process::exit;
 use tracing::log::warn;
 use tracing::{debug, error, info};
 
@@ -40,7 +40,7 @@ mod worker;
 
 const GROW_BY: u64 = 1024 * 1024 * 8;
 const DATA_SPEC_VERSION: u32 = 5;
-const SCORE_SPEC_VERSION: u32 = 1;
+const SCORE_SPEC_VERSION: u32 = 2;
 
 pub(crate) const STATE_DATA_FILE: &'static str = "state/data.json";
 pub(crate) const CURRENT_ROW_FILE: &'static str = "state/current_row.bin";
@@ -75,7 +75,7 @@ struct ValidatorState {
 }
 
 impl ValidatorState {
-    fn for_hotkeys(hotkeys: impl Iterator<Item=AccountId>) -> Self {
+    fn for_hotkeys(hotkeys: impl Iterator<Item = AccountId>) -> Self {
         let key_info = hotkeys
             .map(|hotkey| KeyScoreInfo {
                 hotkey,
@@ -269,7 +269,7 @@ impl Validator {
                                     matches!(state_info.unwrap().score, Score::Cheater),
                                     &metrics,
                                 )
-                                    .into(),
+                                .into(),
                                 info,
                             }
                         } else {
@@ -283,7 +283,7 @@ impl Validator {
                                     false,
                                     &metrics,
                                 )
-                                    .into(),
+                                .into(),
                                 info,
                             }
                         }
@@ -399,7 +399,7 @@ impl Validator {
         Ok(())
     }
 
-    fn load_state(hotkeys: impl Iterator<Item=AccountId>) -> Result<ValidatorState> {
+    fn load_state(hotkeys: impl Iterator<Item = AccountId>) -> Result<ValidatorState> {
         info!("Loading state");
 
         let path = PathBuf::from(STATE_DATA_FILE);
@@ -492,7 +492,7 @@ impl Validator {
                     .neuron_info_runtime_api()
                     .get_neurons_lite(*config::NETUID),
             )
-                .await?;
+            .await?;
 
             let neuron_info = Self::find_neuron_info(&neurons, self.signer.account_id());
 
@@ -521,7 +521,7 @@ impl Validator {
                             false,
                             &self.metrics,
                         )
-                            .into(),
+                        .into(),
                         info,
                     };
                 } else {
@@ -535,7 +535,7 @@ impl Validator {
                             matches!(*neuron.score.get_mut(), Score::Cheater),
                             &self.metrics,
                         )
-                            .into()
+                        .into()
                     }
 
                     neuron.info = neurons[i].clone();
@@ -560,7 +560,7 @@ impl Validator {
                             false,
                             &self.metrics,
                         )
-                            .into(),
+                        .into(),
                         info,
                     }
                 });
@@ -732,16 +732,16 @@ impl Validator {
             byte_count,
             &self.metrics,
         )
-            .await;
+        .await;
 
         while let Ok(_) = self.available_worker_receiver.try_recv() {
             // Clear available worker queue as to not pollute the next step
         }
 
-        for (uid, weight) in weights.into_iter().enumerate() {
+        for (uid, weight) in weights.into_iter() {
             let weight = NonZeroU8::new(weight).or(NonZeroU8::new(1)).unwrap();
 
-            self.neurons[uid].weight = weight;
+            self.neurons[uid as usize].weight = weight;
         }
 
         let bit_index = self.step % u8::BITS as u64;
