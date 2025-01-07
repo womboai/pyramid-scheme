@@ -18,8 +18,9 @@ use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::simd::Simd;
 use std::time::{Duration, Instant};
-use std::{io, slice};
+use std::{env, io, slice};
 use std::process::exit;
+use std::sync::LazyLock;
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, warn};
 
@@ -34,6 +35,14 @@ fn as_u8_mut<T>(data: &mut [T]) -> &mut [u8] {
     // SAFETY: Every &mut _ is representable as &mut [u8], lifetimes match
     unsafe { slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * size_of::<T>()) }
 }
+
+static STAKE_THRESHOLD: LazyLock<u64> = LazyLock::new(|| {
+    (env::var("STAKE_THRESHOLD")
+        .as_ref()
+        .map(|var| var.parse().unwrap())
+        .unwrap_or(4000.0) * 1_000_000_000f64
+    ) as u64
+});
 
 // Ensure that we're always aligned for SIMD access
 type Word = u64;
@@ -210,8 +219,8 @@ impl Miner {
                 .neuron_info_runtime_api()
                 .get_neurons_lite(*config::NETUID),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         let neuron = neurons
             .iter()
@@ -247,7 +256,7 @@ impl Miner {
                     .neuron_info_runtime_api()
                     .get_neurons_lite(*config::NETUID),
             )
-            .await?;
+                .await?;
 
             let neuron = self
                 .neurons
@@ -293,20 +302,20 @@ impl Miner {
             }
 
             if let Ok((mut stream, address)) = listener.accept() {
-                info!("Validator {address} has connected");
+                info!("IP {address} has connected");
 
                 stream.set_nonblocking(false).unwrap();
 
                 let message = match read::<VerificationMessage>(&mut stream) {
                     Ok(message) => message,
                     Err(error) => {
-                        info!("Failed to read signed message from {address}, {error}");
+                        info!("Failed to read signed verification message from {address}, {error}");
                         continue;
                     }
                 };
 
                 if let Err(e) = info_matches(&message, &self.neurons, &self.account_id, self.uid) {
-                    info!("{address} sent a signed message with incorrect information, {e}");
+                    info!("{address} sent a signed verification message with incorrect information, {e}");
                     continue;
                 }
 
@@ -326,6 +335,22 @@ impl Miner {
                     info!("{address} sent a signed message with an incorrect signature");
                     continue;
                 }
+
+                {
+                    let neuron = &self.neurons[message.validator.uid as usize];
+
+                    if !neuron.validator_permit {
+                        info!("IP {address} with UID {uid} does not have validator permit, disconnecting", uid = message.validator.uid);
+                        continue;
+                    }
+
+                    if neuron.stake.iter().map(|(_, stake)| stake.0).sum::<u64>() < *STAKE_THRESHOLD {
+                        info!("IP {address} with UID {uid} does not have enough stake, disconnecting", uid = message.validator.uid);
+                        continue;
+                    }
+                }
+
+                info!("IP {address} is confirmed to be Validator UID {uid}", uid = message.validator.uid);
 
                 if let Err(e) = stream.write(&SPEC_VERSION.to_le_bytes()) {
                     warn!(
