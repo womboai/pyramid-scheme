@@ -1,5 +1,5 @@
 use crate::validator::metrics::ValidatorMetrics;
-use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
+use crate::validator::neuron_data::{NeuronData, Score};
 use crate::validator::worker::{
     ProcessingCompletionResult, ProcessingCompletionState, ProcessingRequest,
 };
@@ -45,7 +45,7 @@ pub async fn handle_completion_events(
                 info!("Miner {uid} failed at assigned work, disconnecting");
 
                 unsafe {
-                    *neurons[uid as usize].connection.get() = ConnectionState::Disconnected;
+                    *neurons[uid as usize].connection.get() = None;
                 }
 
                 metrics.connected_miners.add(-1, &[]);
@@ -71,7 +71,7 @@ pub async fn handle_completion_events(
                 info!("Miner {uid} marked as cheater");
 
                 unsafe {
-                    *neurons[uid as usize].connection.get() = ConnectionState::Unusable;
+                    *neurons[uid as usize].connection.get() = None;
                 }
 
                 metrics.connected_miners.add(-1, &[]);

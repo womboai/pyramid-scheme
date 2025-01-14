@@ -1,5 +1,5 @@
 use crate::validator::metrics::ValidatorMetrics;
-use crate::validator::neuron_data::{ConnectionState, NeuronData};
+use crate::validator::neuron_data::NeuronData;
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
 use neuron::{config, SPEC_VERSION};
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -22,9 +22,9 @@ pub fn connect_to_miner(
     neuron: &NeuronInfoLite,
     cheater: bool,
     metrics: &ValidatorMetrics,
-) -> ConnectionState {
+) -> Option<TcpStream> {
     if cheater {
-        return ConnectionState::Unusable;
+        return None;
     }
 
     let ip: IpAddr = if neuron.axon_info.ip_type == 4 {
@@ -42,13 +42,13 @@ pub fn connect_to_miner(
             if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
                 warn!("Not continuing connection to uid {uid} at {address} because could not configure read timeout, {e}", uid = neuron.uid.0);
 
-                return ConnectionState::Unusable;
+                return None;
             }
 
             if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
                 warn!("Not continuing connection to uid {uid} at {address} because could not configure write timeout, {e}", uid = neuron.uid.0);
 
-                return ConnectionState::Unusable;
+                return None;
             }
 
             let message = VerificationMessage {
@@ -71,13 +71,13 @@ pub fn connect_to_miner(
             if let Err(e) = stream.write((&message).as_ref()) {
                 warn!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
 
-                return ConnectionState::Unusable;
+                return None;
             };
 
             if let Err(e) = stream.write(&signature) {
                 warn!("Failed to write to miner {uid}, {e}", uid = neuron.uid.0);
 
-                return ConnectionState::Unusable;
+                return None;
             }
 
             let mut version_buffer = [0u8; size_of::<u32>()];
@@ -88,7 +88,7 @@ pub fn connect_to_miner(
                     uid = neuron.uid.0
                 );
 
-                return ConnectionState::Unusable;
+                return None;
             }
 
             let version = u32::from_le_bytes(version_buffer);
@@ -96,11 +96,11 @@ pub fn connect_to_miner(
             if version != SPEC_VERSION {
                 warn!("Miner {uid} is using incorrect spec, expected {SPEC_VERSION} but got {version}", uid = neuron.uid.0);
 
-                return ConnectionState::Unusable;
+                return None;
             }
 
             metrics.connected_miners.add(1, &[]);
-            ConnectionState::connected(stream)
+            Some(stream)
         }
         Err(error) => {
             warn!(
@@ -108,7 +108,7 @@ pub fn connect_to_miner(
                 uid = neuron.uid.0
             );
 
-            ConnectionState::Unusable
+            None
         }
     }
 }
@@ -117,7 +117,7 @@ pub fn worker_count_hint(neurons: &mut [NeuronData]) -> usize {
     let mut count = 0;
 
     for x in neurons.iter_mut() {
-        if matches!(x.connection.get_mut(), ConnectionState::Connected(_),) {
+        if x.connection.get_mut().is_some() {
             count += 1;
         }
     }
@@ -134,7 +134,7 @@ pub fn worker_connections(neurons: &mut [NeuronData]) -> Vec<AvailableWorkerConn
             &mut *neuron.connection.get()
         };
 
-        if let ConnectionState::Connected(stream) = connection {
+        if let Some(stream) = connection {
             weights.push(AvailableWorkerConnection {
                 uid: neuron.info.uid.0,
                 stream,

@@ -43,23 +43,11 @@ impl AddAssign<u128> for Score {
     }
 }
 
-pub enum ConnectionState {
-    Connected(TcpStream),
-    Disconnected,
-    Unusable,
-}
-
-impl ConnectionState {
-    pub fn connected(stream: TcpStream) -> Self {
-        Self::Connected(stream)
-    }
-}
-
 pub struct NeuronData {
     pub info: NeuronInfoLite,
 
     pub weight: NonZeroU8,
     pub score: SyncUnsafeCell<Score>,
 
-    pub connection: SyncUnsafeCell<ConnectionState>,
+    pub connection: SyncUnsafeCell<Option<TcpStream>>,
 }

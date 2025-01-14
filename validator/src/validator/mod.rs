@@ -2,7 +2,7 @@ use neuron::{config, should_restart, subtensor, INTEGRAL_VERSION};
 use rusttensor::{AccountId, Block, BlockNumber};
 
 use crate::validator::metrics::ValidatorMetrics;
-use crate::validator::neuron_data::{ConnectionState, NeuronData, Score};
+use crate::validator::neuron_data::{NeuronData, Score};
 
 use crate::validator::completion_event_handler::handle_completion_events;
 use crate::validator::connection::{connect_to_miner, worker_connections, worker_count_hint};
@@ -525,9 +525,7 @@ impl Validator {
                         info,
                     };
                 } else {
-                    if matches!(neuron.connection.get_mut(), ConnectionState::Disconnected)
-                        || neurons[i].axon_info != neuron.info.axon_info
-                    {
+                    if neuron.connection.get_mut().is_none() || neurons[i].axon_info != neuron.info.axon_info {
                         neuron.connection = connect_to_miner(
                             &self.signer,
                             self.uid,
