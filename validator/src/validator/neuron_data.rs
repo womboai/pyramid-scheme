@@ -1,53 +1,56 @@
 use rusttensor::rpc::types::NeuronInfoLite;
 use serde::{Deserialize, Serialize};
 use std::cell::SyncUnsafeCell;
+use std::cmp::Ordering;
 use std::net::TcpStream;
-use std::num::NonZeroU8;
-use std::ops::{Add, AddAssign};
+use std::ops::AddAssign;
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-pub enum Score {
-    Legitimate(u128),
+const ADJUSTMENT_ALPHA: f64 = 0.1;
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Rate {
+    Legitimate(f64),
+    Newcomer,
     Cheater,
 }
 
-impl Default for Score {
+impl Default for Rate {
     fn default() -> Self {
-        Score::Legitimate(0)
+        Rate::Newcomer
     }
 }
 
-impl From<Score> for u128 {
-    fn from(value: Score) -> Self {
-        match value {
-            Score::Legitimate(value) => value,
-            Score::Cheater => 0,
+impl PartialOrd for Rate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (*self, other) {
+            (Rate::Legitimate(a), Rate::Legitimate(b)) => a.partial_cmp(&b),
+            (Rate::Legitimate(_), _) => Some(Ordering::Greater),
+            (Rate::Newcomer, Rate::Newcomer) => Some(Ordering::Equal),
+            (Rate::Newcomer, Rate::Cheater) => Some(Ordering::Greater),
+            (Rate::Cheater, Rate::Cheater) => Some(Ordering::Equal),
+            (a, b) => b.partial_cmp(&a).map(|o| o.reverse()),
         }
     }
 }
 
-impl Add<u128> for Score {
-    type Output = Score;
-
-    fn add(self, rhs: u128) -> Self::Output {
+impl AddAssign<f64> for Rate {
+    fn add_assign(&mut self, rhs: f64) {
         match self {
-            Score::Legitimate(value) => Score::Legitimate(value + rhs),
-            Score::Cheater => Score::Cheater,
+            Rate::Legitimate(existing) => {
+                *existing = (*existing * (1.0 - ADJUSTMENT_ALPHA)) + (rhs * ADJUSTMENT_ALPHA)
+            }
+            Rate::Newcomer => {
+                *self = Rate::Legitimate(rhs);
+            }
+            Rate::Cheater => {}
         }
-    }
-}
-
-impl AddAssign<u128> for Score {
-    fn add_assign(&mut self, rhs: u128) {
-        *self = self.add(rhs);
     }
 }
 
 pub struct NeuronData {
     pub info: NeuronInfoLite,
 
-    pub weight: NonZeroU8,
-    pub score: SyncUnsafeCell<Score>,
+    pub rate: Rate,
 
     pub connection: SyncUnsafeCell<Option<TcpStream>>,
 }
