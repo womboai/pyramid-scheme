@@ -1,5 +1,5 @@
 use crate::validator::metrics::ValidatorMetrics;
-use crate::validator::neuron_data::NeuronData;
+use crate::validator::neuron_data::{NeuronData, Rate};
 use neuron::auth::{KeyRegistrationInfo, VerificationMessage};
 use neuron::{config, SPEC_VERSION};
 use rusttensor::rpc::types::NeuronInfoLite;
@@ -13,7 +13,7 @@ use tracing::{info, warn};
 pub struct AvailableWorkerConnection {
     pub uid: u16,
     pub stream: &'static mut TcpStream,
-    pub weight: u8,
+    pub rate: f64,
 }
 
 pub fn connect_to_miner(
@@ -126,7 +126,17 @@ pub fn worker_count_hint(neurons: &mut [NeuronData]) -> usize {
 }
 
 pub fn worker_connections(neurons: &mut [NeuronData]) -> Vec<AvailableWorkerConnection> {
-    let mut weights = Vec::with_capacity(neurons.len());
+    if neurons.is_empty() {
+        return vec![];
+    }
+
+    let mut connections = Vec::with_capacity(neurons.len());
+
+    let max_rate = neurons
+        .iter()
+        .map(|neuron| neuron.rate)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
 
     for neuron in neurons.iter_mut() {
         let connection = unsafe {
@@ -135,15 +145,20 @@ pub fn worker_connections(neurons: &mut [NeuronData]) -> Vec<AvailableWorkerConn
         };
 
         if let Some(stream) = connection {
-            weights.push(AvailableWorkerConnection {
+            connections.push(AvailableWorkerConnection {
                 uid: neuron.info.uid.0,
                 stream,
-                weight: neuron.weight.get(),
+                rate: match (neuron.rate, max_rate) {
+                    (_, Rate::Newcomer) => 1.0,
+                    (Rate::Newcomer, Rate::Legitimate(max)) => max,
+                    (Rate::Legitimate(score), _) => score,
+                    _ => 0.0,
+                },
             });
         }
     }
 
-    weights.sort_by(|x, y| x.weight.cmp(&y.weight).reverse());
+    connections.sort_by(|x, y| x.rate.partial_cmp(&y.rate).unwrap().reverse());
 
-    weights
+    connections
 }
