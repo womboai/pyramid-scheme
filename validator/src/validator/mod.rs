@@ -497,12 +497,12 @@ impl Validator {
 
             self.uid = neuron_info.uid.0;
 
-            let handles = thread::scope(|scope| {
+            let neurons = thread::scope(|scope| {
                 let mut existing_neurons = mem::take(self.neurons.as_mut().get_mut()).into_iter().map(Some).collect::<Vec<_>>();
 
                 existing_neurons.resize_with(neurons.len(), || None);
 
-                existing_neurons
+                let handles = existing_neurons
                     .into_iter()
                     .enumerate()
                     .map(|(index, neuron)| {
@@ -568,10 +568,15 @@ impl Validator {
                             }
                         })
                     })
+                    .collect::<Vec<_>>();
+
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap())
                     .collect::<Vec<_>>()
             });
 
-            *self.neurons.as_mut().get_mut() = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+            *self.neurons.as_mut().get_mut() = neurons;
 
             let worker_count = worker_count_hint(&mut self.neurons);
 
