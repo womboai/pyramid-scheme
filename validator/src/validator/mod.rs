@@ -48,6 +48,7 @@ pub(crate) const CENTER_COLUMN_FILE: &'static str = "state/center_column.bin";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyScoreInfo {
+    #[serde(default)]
     score: Score,
     #[serde(default = "default_weight")]
     weight: NonZeroU8,
