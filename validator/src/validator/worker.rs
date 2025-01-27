@@ -4,7 +4,6 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::ops::Range;
-use std::pin::Pin;
 use std::random::random;
 use std::slice;
 use std::sync::mpmc::{Receiver, Sender};
@@ -218,7 +217,7 @@ fn handle_connection(
 }
 
 pub fn do_work(
-    current_row: Pin<&SyncUnsafeCell<Vec<u8>>>,
+    current_row: &SyncUnsafeCell<Vec<u8>>,
     available_worker_receiver: Receiver<(u16, &'static mut TcpStream)>,
     work_queue_receiver: Receiver<ProcessingRequest>,
     completion_sender: Sender<ProcessingCompletionResult>,

@@ -1,5 +1,5 @@
 use crate::validator::metrics::ValidatorMetrics;
-use crate::validator::neuron_data::{NeuronData, Rate};
+use crate::validator::neuron_data::{NeuronData, Score};
 use crate::validator::worker::{
     ProcessingCompletionResult, ProcessingCompletionState, ProcessingRequest,
 };
@@ -8,13 +8,14 @@ use std::sync::mpmc::{Receiver, Sender};
 use tracing::{debug, info};
 
 pub async fn handle_completion_events(
-    neurons: &mut [NeuronData],
+    neurons: &[NeuronData],
     available_worker_sender: &Sender<(u16, &'_ mut TcpStream)>,
     completion_receiver: &Receiver<ProcessingCompletionResult>,
     work_queue_sender: &Sender<ProcessingRequest>,
     byte_count: u64,
     metrics: &ValidatorMetrics,
-) {
+) -> Vec<(u16, u8)> {
+    let mut time_per_uid_byte = Vec::new();
     let mut data_processed = 0;
 
     while data_processed < byte_count {
@@ -22,13 +23,19 @@ pub async fn handle_completion_events(
 
         let uid = event.uid;
 
+        let score = neurons[uid as usize].score.get();
+
         match event.state {
             ProcessingCompletionState::Completed(processed, connection, duration) => {
                 debug!("Miner {uid} finished assigned work");
 
                 data_processed += processed;
 
-                neurons[uid as usize].rate += processed as f64 / duration.as_secs_f64();
+                unsafe {
+                    *score += processed as u128;
+                }
+
+                time_per_uid_byte.push((uid, duration, processed));
 
                 available_worker_sender
                     .send((uid, connection))
@@ -44,7 +51,17 @@ pub async fn handle_completion_events(
                 metrics.connected_miners.add(-1, &[]);
                 data_processed += processed;
 
-                neurons[uid as usize].rate += processed as f64 / duration.as_secs_f64();
+                unsafe {
+                    *score += processed as u128;
+                }
+
+                if let Some((_, d, p)) = time_per_uid_byte.iter_mut().find(|(id, _, _)| *id == uid)
+                {
+                    *d += duration;
+                    *p += processed;
+                } else {
+                    time_per_uid_byte.push((uid, duration, processed));
+                }
 
                 work_queue_sender
                     .send(remaining)
@@ -60,7 +77,9 @@ pub async fn handle_completion_events(
                 metrics.connected_miners.add(-1, &[]);
                 metrics.cheater_count.add(1, &[]);
 
-                neurons[uid as usize].rate = Rate::Cheater;
+                unsafe {
+                    *score = Score::Cheater;
+                }
 
                 work_queue_sender
                     .send(range)
@@ -68,4 +87,43 @@ pub async fn handle_completion_events(
             }
         }
     }
+
+    let mut uid_times = Vec::new();
+
+    let mut minimum_time = u128::MAX;
+    let mut maximum_time = 0;
+
+    for (uid, duration, processed) in time_per_uid_byte {
+        if processed == 0 {
+            continue;
+        }
+
+        let time_per_byte = duration.as_nanos() / processed as u128;
+
+        if time_per_byte < minimum_time {
+            minimum_time = time_per_byte;
+        }
+
+        if time_per_byte > maximum_time {
+            maximum_time = time_per_byte;
+        }
+
+        uid_times.push((uid, time_per_byte));
+    }
+
+    let range = maximum_time - minimum_time;
+
+    uid_times
+        .iter()
+        .map(|(uid, time)| {
+            if range == 0 {
+                return (*uid, u8::MAX);
+            }
+
+            let contribution_time = u8::MAX as u128 * (time - minimum_time);
+            let inverse_weight = contribution_time / range;
+
+            (*uid, u8::MAX - inverse_weight as u8)
+        })
+        .collect()
 }
