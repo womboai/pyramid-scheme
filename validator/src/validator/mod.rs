@@ -160,7 +160,7 @@ impl Validator {
     }
 
     fn current_row_file_size(step: u64) -> u64 {
-        (Self::step_to_grow_to(step) * 2 - 1).div_ceil(u8::BITS as u64)
+        (Self::step_to_grow_to(step) * 2 + 1).div_ceil(u8::BITS as u64)
     }
 
     fn center_column_file_size(step: u64) -> u64 {
